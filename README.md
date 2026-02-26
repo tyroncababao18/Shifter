@@ -6,6 +6,35 @@ Shifter takes the pain out of building monthly shift rotations. It balances work
 
 ---
 
+## Screenshots
+
+### Dashboard
+Overview of all teams with key stats at a glance.
+
+![Dashboard](docs/screenshots/dashboard.png)
+
+### Team Members
+Manage members, view shift counts, swap balances, and roles.
+
+![Team Detail](docs/screenshots/team-detail.png)
+
+### Schedule
+Dual calendar view — night shifts and Shotef (day duty) side by side, with swap tracking and availability badges.
+
+![Schedule](docs/screenshots/schedule.png)
+
+### Reports
+Per-member shift distribution with fairness metrics across all teams.
+
+![Reports](docs/screenshots/reports.png)
+
+### Settings
+Configure shift caps, rest gaps, and fairness lookback — globally or per team.
+
+![Settings](docs/screenshots/settings.png)
+
+---
+
 ## Features
 
 - **Automatic schedule generation** — one click to build a fair monthly rotation

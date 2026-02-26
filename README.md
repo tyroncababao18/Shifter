@@ -23,6 +23,11 @@ Dual calendar view — night shifts and Shotef (day duty) side by side, with swa
 
 ![Schedule](docs/screenshots/schedule.png)
 
+### Past Shifts
+Browse historical shift data month by month — full calendar of color-coded night shift assignments.
+
+![Past Shifts](docs/screenshots/past-shifts.png)
+
 ### Reports
 Per-member shift distribution with fairness metrics across all teams.
 

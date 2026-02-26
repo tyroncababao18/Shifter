@@ -53,15 +53,17 @@ source venv/bin/activate   # Windows: venv\Scripts\activate
 # Install dependencies
 pip install -r requirements.txt
 
-# (Optional) Configure database URL
-export DATABASE_URL="postgresql://user:pass@localhost/shifter"
-# If not set, defaults to SQLite (justice.db)
+# Copy the env template and edit if needed
+cp .env.example .env
+# By default it uses SQLite — no database server required.
+# For PostgreSQL, edit .env and set:
+#   DATABASE_URL=postgresql://user:pass@localhost:5432/shifter
 
 # Run the server
 python app.py
 ```
 
-The API starts at `http://localhost:5001`.
+The API starts at `http://localhost:5001`. All database tables are created automatically on first run — no manual migration needed.
 
 ### Frontend Setup
 

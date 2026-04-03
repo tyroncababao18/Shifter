@@ -2,7 +2,7 @@
 
 A fair, automated shift scheduling system for teams. Built with **Flask** (Python) and **React** (TypeScript).
 
-Shifter takes the pain out of building monthly shift rotations. It balances workload across team members using a fairness algorithm that considers historical shifts, swap debts, per-type caps, and configurable rest gaps — so no one gets stuck with all the bad shifts.
+Shifter takes the pain out of building monthly shift rotations. It balances workload across team members using a smart fairness algorithm that considers historical shifts, swap debts, availability ratios, member weights, per-type caps, and configurable rest gaps — so no one gets stuck with all the bad shifts.
 
 ---
 
@@ -19,7 +19,7 @@ Manage members, view shift counts, swap balances, and roles.
 ![Team Detail](docs/screenshots/team-detail.png)
 
 ### Schedule
-Dual calendar view — night shifts and Shotef (day duty) side by side, with swap tracking and availability badges.
+Dual calendar view — night shifts and day shifts side by side, with swap tracking and availability badges.
 
 ![Schedule](docs/screenshots/schedule.png)
 
@@ -34,7 +34,7 @@ Per-member shift distribution with fairness metrics across all teams.
 ![Reports](docs/screenshots/reports.png)
 
 ### Settings
-Configure shift caps, rest gaps, and fairness lookback — globally or per team.
+Configure shift caps, rest gaps, fairness mode, and algorithm behavior — globally or per team.
 
 ![Settings](docs/screenshots/settings.png)
 
@@ -43,17 +43,66 @@ Configure shift caps, rest gaps, and fairness lookback — globally or per team.
 ## Features
 
 - **Automatic schedule generation** — one click to build a fair monthly rotation
-- **Fairness algorithm** — considers historical shift counts, swap debts, per-type balancing (normal / Thursday / weekend), and credit adjustments
-- **Shotef (day duty)** — optional weekly Sun-Thu day-duty rotation with independent fairness tracking
+- **Smart fairness algorithm** — two modes:
+  - **Count mode** (default) — balances by total shift count, swap debts, and per-type history
+  - **Ratio mode** — normalizes fairness by each member's availability, so members available less often aren't overloaded
+- **Member weights** — assign a load factor per member (e.g., 0.5 = half the shifts) for part-timers or special roles
+- **Minimum participation** — configurable floor ensures every member gets at least N shifts per month
+- **Rebalancing pass** — optional second pass swaps assignments between over- and under-loaded members for tighter fairness
+- **Day shifts** — optional weekly Sun-Thu day shift rotation with independent fairness tracking
+- **Night shifts** — the core scheduling: daily night shift assignments with weekend pairing (Fri-Sat)
 - **Shift swaps** — trade shifts between members with automatic debt tracking
 - **Availability management** — members mark unavailable dates; the scheduler works around them
 - **Weekend pairing** — Friday-Saturday shifts are automatically assigned to the same member
 - **Past shift import** — backfill historical data so the algorithm has full context
 - **Excel export** — download any month's schedule as an `.xlsx` file
-- **Per-team settings** — configure shift caps, rest gaps, lookback windows, and Shotef per team
+- **Per-team settings** — configure all algorithm parameters globally or per team
 - **Random picker** — utility for ad-hoc random member selection
 - **Modern UI** — responsive React app with Tailwind CSS
 - **REST API** — clean JSON API, easy to integrate with other tools
+
+---
+
+## Scheduling Algorithm
+
+Shifter's scheduling engine is a configurable, multi-phase assignment system:
+
+### Phase 1: Justice Computation
+For each member, compute an **effective shift count** considering:
+- Historical shifts (within a configurable lookback window or all-time)
+- Swap debt (covering others' shifts reduces your burden)
+- Manual credit adjustments
+
+### Phase 2: Minimum Participation (optional)
+If `min_shifts_per_month > 0`, a pre-pass ensures members with limited availability are guaranteed their minimum shifts before the main loop runs.
+
+### Phase 3: Greedy Assignment
+Day-by-day, the algorithm selects the best candidate for each shift:
+- Filters by availability, gap constraints, and monthly caps
+- Sorts candidates using the configured fairness mode:
+  - **Count**: `(type_count, past_count, monthly_total, random)`
+  - **Ratio**: `(burden_ratio, type_count, random)` where `burden = weighted_shifts / available_days`
+- Weekend shifts (Fri-Sat) are paired automatically
+
+### Phase 4: Rebalancing (optional)
+When enabled, a second pass identifies the most- and least-burdened members and swaps assignments to reduce the fairness spread — respecting all constraints.
+
+### Configuration
+
+All algorithm settings are configurable per team via the Admin Settings page:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `max_normal_shifts` | 6 | Max Sun-Wed shifts per member per month |
+| `max_thursday_shifts` | 1 | Max Thursday shifts per member per month |
+| `max_weekend_shifts` | 1 | Max Fri-Sat pair shifts per member per month |
+| `min_days_between_shifts` | 1 | Minimum gap between consecutive shifts |
+| `justice_lookback_months` | 0 | Months of history to consider (0 = all-time) |
+| `fairness_mode` | count | `count` (absolute) or `ratio` (availability-weighted) |
+| `min_shifts_per_month` | 0 | Minimum shifts per member (0 = disabled) |
+| `enable_rebalancing` | false | Run a second pass to improve fairness spread |
+
+Each member also has a **shift weight** (default 1.0). A weight of 0.5 means the member is expected to take half the normal load — useful for part-timers or members with other responsibilities.
 
 ---
 
@@ -129,8 +178,14 @@ This creates sample teams, members, and historical shift data so you can explore
 ```
 shifter/
 ├── backend/
-│   ├── app.py              # Flask routes, scheduling engine, API endpoints
+│   ├── app.py              # Flask routes, API endpoints, day shift generation
 │   ├── models.py           # SQLAlchemy models (Team, Member, Shift, etc.)
+│   ├── scheduling/         # Scheduling algorithm package
+│   │   ├── __init__.py     # Main create_schedule orchestrator
+│   │   ├── types.py        # MemberState, ScheduleConfig dataclasses
+│   │   ├── fairness.py     # Sort key strategies (count & ratio modes)
+│   │   ├── constraints.py  # Eligibility filters, min participation
+│   │   └── rebalancer.py   # Post-pass rebalancing algorithm
 │   ├── seed_test_data.py   # Test data seeder
 │   └── requirements.txt    # Python dependencies
 ├── frontend/
@@ -149,11 +204,12 @@ shifter/
 ## Usage
 
 1. **Create a team** on the Dashboard
-2. **Add members** to the team
+2. **Add members** to the team — set shift weights for part-timers if needed
 3. **Set availability** — open the Schedule page, click Availability, mark unavailable dates
-4. **Generate** — click Generate to build the monthly rotation
-5. **Review & adjust** — swap shifts, manually assign empty slots, edit assignments inline
-6. **Export** — download the schedule as Excel
+4. **Configure** — in Settings, choose fairness mode, set minimum participation, enable rebalancing
+5. **Generate** — click Generate to build the monthly rotation
+6. **Review & adjust** — swap shifts, manually assign empty slots, edit assignments inline
+7. **Export** — download the schedule as Excel
 
 ---
 

@@ -10,9 +10,9 @@ import {
   getScheduleView, generateSchedule, deleteSchedule, assignShift,
   swapShift, revertSwap, reassignShift,
   bulkCreateUnavailability, deleteUnavailability,
-  reassignShotefDay,
+  reassignDayShift,
   type Team, type ShiftEntry, type Suggestion, type Member, type Unavailability,
-  type ShotefDayEntry, type ShotefSubNeed,
+  type DayShiftEntry, type DayShiftSubNeed,
 } from "../api";
 import Modal from "../components/Modal";
 import ConfirmDialog from "../components/ConfirmDialog";
@@ -60,13 +60,13 @@ export default function SchedulePage() {
 
   // Inline edit state
   const [editingShiftId, setEditingShiftId] = useState<number | null>(null);
-  const [editingShotefDate, setEditingShotefDate] = useState<string | null>(null);
+  const [editingDayShiftDate, setEditingDayShiftDate] = useState<string | null>(null);
 
-  // Shotef state
-  const [shotefDays, setShotefDays] = useState<ShotefDayEntry[]>([]);
-  const [shotefSubNeeds, setShotefSubNeeds] = useState<ShotefSubNeed[]>([]);
-  const [showShotefSubs, setShowShotefSubs] = useState(false);
-  const [assigningShotef, setAssigningShotef] = useState<string | null>(null);
+  // Day Shift state
+  const [dayShiftDays, setDayShiftDays] = useState<DayShiftEntry[]>([]);
+  const [dayShiftSubNeeds, setDayShiftSubNeeds] = useState<DayShiftSubNeed[]>([]);
+  const [showDayShiftSubs, setShowDayShiftSubs] = useState(false);
+  const [assigningDayShift, setAssigningDayShift] = useState<string | null>(null);
 
   const isPastMonth = month.isBefore(dayjs().startOf("month"));
 
@@ -76,7 +76,7 @@ export default function SchedulePage() {
       setTeam(data.team);
       setMembers(data.members);
       setShifts(data.shifts);
-      setShotefDays(data.shotef_days);
+      setDayShiftDays(data.day_shift_days);
     } catch {
       toast.error("Failed to load schedule");
     } finally {
@@ -108,13 +108,13 @@ export default function SchedulePage() {
 
   const swappedShifts = useMemo(() => shifts.filter((s) => s.swap), [shifts]);
 
-  const shotefByDate = useMemo(() => {
-    const map: Record<string, { memberName: string; shotefDayId: number }> = {};
-    for (const sd of shotefDays) {
-      map[sd.date] = { memberName: sd.member_name, shotefDayId: sd.id };
+  const dayShiftByDate = useMemo(() => {
+    const map: Record<string, { memberName: string; dayShiftDayId: number }> = {};
+    for (const sd of dayShiftDays) {
+      map[sd.date] = { memberName: sd.member_name, dayShiftDayId: sd.id };
     }
     return map;
-  }, [shotefDays]);
+  }, [dayShiftDays]);
 
   const handleGenerate = async () => {
     setGenerating(true);
@@ -123,8 +123,8 @@ export default function SchedulePage() {
       toast.success("Schedule generated");
       setSuggestions(data.suggestions);
       if (data.suggestions.length > 0) setShowSuggestions(true);
-      setShotefSubNeeds(data.shotef_needs_substitute || []);
-      if ((data.shotef_needs_substitute || []).length > 0) setShowShotefSubs(true);
+      setDayShiftSubNeeds(data.day_shift_needs_substitute || []);
+      if ((data.day_shift_needs_substitute || []).length > 0) setShowDayShiftSubs(true);
       load();
     } catch (err: any) {
       toast.error(err.response?.data?.error || "Generation failed");
@@ -153,7 +153,7 @@ export default function SchedulePage() {
       await deleteSchedule(id, month.year(), month.month() + 1);
       toast.success("Schedule deleted");
       setShifts([]);
-      setShotefDays([]);
+      setDayShiftDays([]);
     } catch {
       toast.error("Failed to delete schedule");
     }
@@ -222,20 +222,20 @@ export default function SchedulePage() {
     }
   };
 
-  const handleReassignShotefDay = async (dateStr: string, memberId: number) => {
-    const sd = shotefDays.find((d) => d.date === dateStr);
+  const handleReassignDayShiftDay = async (dateStr: string, memberId: number) => {
+    const sd = dayShiftDays.find((d) => d.date === dateStr);
     if (!sd) return;
     const key = `${sd.id}-${dateStr}-${memberId}`;
-    setAssigningShotef(key);
+    setAssigningDayShift(key);
     try {
-      await reassignShotefDay(id, sd.id, memberId);
-      toast.success("Shotef day reassigned");
-      setShotefSubNeeds((prev) => prev.filter((n) => n.date !== dateStr));
+      await reassignDayShift(id, sd.id, memberId);
+      toast.success("Day shift reassigned");
+      setDayShiftSubNeeds((prev) => prev.filter((n) => n.date !== dateStr));
       load();
     } catch (err: any) {
       toast.error(err.response?.data?.error || "Failed to reassign");
     } finally {
-      setAssigningShotef(null);
+      setAssigningDayShift(null);
     }
   };
 
@@ -250,13 +250,13 @@ export default function SchedulePage() {
     }
   };
 
-  const handleEditShotefDay = async (dateStr: string, memberId: number) => {
-    const sd = shotefDays.find((d) => d.date === dateStr);
+  const handleEditDayShiftDay = async (dateStr: string, memberId: number) => {
+    const sd = dayShiftDays.find((d) => d.date === dateStr);
     if (!sd) return;
     try {
-      await reassignShotefDay(id, sd.id, memberId);
-      toast.success("Shotef reassigned");
-      setEditingShotefDate(null);
+      await reassignDayShift(id, sd.id, memberId);
+      toast.success("Day shift reassigned");
+      setEditingDayShiftDate(null);
       load();
     } catch (err: any) {
       toast.error(err.response?.data?.error || "Failed to reassign");
@@ -343,7 +343,7 @@ export default function SchedulePage() {
         </div>
       </div>
 
-      {/* ── Member Availability Panel ── */}
+      {/* -- Member Availability Panel -- */}
       {showAvailability && (
         <div className="mb-5 bg-white rounded-xl border border-amber-200 overflow-hidden">
           <div className="px-5 py-3 bg-amber-50 border-b border-amber-200 flex items-center justify-between">
@@ -415,7 +415,7 @@ export default function SchedulePage() {
         </div>
       )}
 
-      {/* ── Dual Calendars ── */}
+      {/* -- Dual Calendars -- */}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
 
       {/* Night Shifts Calendar */}
@@ -524,12 +524,12 @@ export default function SchedulePage() {
       )}
       </div>
 
-      {/* Shotef (Day Duty) Calendar */}
+      {/* Day Shifts Calendar */}
       <div>
         <h3 className="text-sm font-semibold text-gray-900 mb-2 flex items-center gap-2">
           <span className="w-2 h-2 rounded-full bg-teal-500" />
-          Shotef (Day Duty)
-          {shotefDays.length === 0 && (
+          Day Shifts
+          {dayShiftDays.length === 0 && (
             <span className="text-xs text-gray-400 font-normal">&mdash; No data for this month</span>
           )}
         </h3>
@@ -544,9 +544,9 @@ export default function SchedulePage() {
               const dateStr = day?.format("YYYY-MM-DD");
               const dayNum = day?.day();
               const isWeekend = day && (dayNum === 5 || dayNum === 6);
-              const isShotefDay = day && dayNum !== undefined && dayNum >= 0 && dayNum <= 4;
+              const isDayShiftDay = day && dayNum !== undefined && dayNum >= 0 && dayNum <= 4;
               const isToday = day && day.isSame(dayjs(), "day");
-              const shotefInfo = dateStr ? shotefByDate[dateStr] : undefined;
+              const dayShiftInfo = dateStr ? dayShiftByDate[dateStr] : undefined;
 
               return (
                 <div
@@ -560,17 +560,17 @@ export default function SchedulePage() {
                       <div className={`text-xs font-medium mb-1 ${isToday ? "w-6 h-6 rounded-full bg-teal-600 text-white flex items-center justify-center" : "text-gray-500"}`}>
                         {day.date()}
                       </div>
-                      {isShotefDay && shotefInfo && (
+                      {isDayShiftDay && dayShiftInfo && (
                         <div className="mb-0.5">
-                          {editingShotefDate === dateStr ? (
+                          {editingDayShiftDate === dateStr ? (
                             <select
                               autoFocus
                               className="w-full text-[11px] px-1 py-0.5 border border-teal-300 rounded bg-white focus:ring-1 focus:ring-teal-500 outline-none"
                               defaultValue=""
                               onChange={(e) => {
-                                if (e.target.value) handleEditShotefDay(dateStr!, Number(e.target.value));
+                                if (e.target.value) handleEditDayShiftDay(dateStr!, Number(e.target.value));
                               }}
-                              onBlur={() => setEditingShotefDate(null)}
+                              onBlur={() => setEditingDayShiftDate(null)}
                             >
                               <option value="">Select member...</option>
                               {members.filter((m) => !m.is_leader).map((m) => (
@@ -579,11 +579,11 @@ export default function SchedulePage() {
                             </select>
                           ) : (
                             <div className="text-xs px-1.5 py-0.5 rounded font-medium bg-teal-100 text-teal-800 flex items-center gap-1 group">
-                              <span className="truncate flex-1">{shotefInfo.memberName}</span>
+                              <span className="truncate flex-1">{dayShiftInfo.memberName}</span>
                               <button
-                                onClick={() => setEditingShotefDate(dateStr!)}
+                                onClick={() => setEditingDayShiftDate(dateStr!)}
                                 className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-black/10 shrink-0"
-                                title="Edit shotef"
+                                title="Edit day shift"
                               >
                                 <Pencil size={10} />
                               </button>
@@ -591,11 +591,11 @@ export default function SchedulePage() {
                           )}
                         </div>
                       )}
-                      {isShotefDay && !shotefInfo && shotefDays.length > 0 && (
+                      {isDayShiftDay && !dayShiftInfo && dayShiftDays.length > 0 && (
                         <div className="text-[10px] text-gray-300 italic">—</div>
                       )}
                       {isWeekend && (
-                        <div className="text-[10px] text-gray-300 italic">No shotef</div>
+                        <div className="text-[10px] text-gray-300 italic">No day shift</div>
                       )}
                     </>
                   )}
@@ -604,9 +604,9 @@ export default function SchedulePage() {
             })}
           </div>
         </div>
-        {shotefDays.length > 0 && (
+        {dayShiftDays.length > 0 && (
           <div className="mt-3 flex flex-wrap gap-2">
-            {[...new Set(shotefDays.map((d) => d.member_name))].map((name) => (
+            {[...new Set(dayShiftDays.map((d) => d.member_name))].map((name) => (
               <span key={name} className="text-xs px-2 py-1 rounded-full font-medium bg-teal-100 text-teal-800">
                 {name}
               </span>
@@ -853,42 +853,42 @@ export default function SchedulePage() {
         </div>
       </Modal>
 
-      {/* Shotef Reassignment Modal */}
-      <Modal open={showShotefSubs && shotefSubNeeds.length > 0} onClose={() => setShowShotefSubs(false)} title="Shotef — Reassignment Needed" wide>
+      {/* Day Shift Reassignment Modal */}
+      <Modal open={showDayShiftSubs && dayShiftSubNeeds.length > 0} onClose={() => setShowDayShiftSubs(false)} title="Day Shift — Reassignment Needed" wide>
         <div className="space-y-3">
           <p className="text-sm text-gray-500 flex items-center gap-2">
             <AlertTriangle size={14} className="text-teal-500" />
-            The assigned Shotef member is unavailable on some days. Pick a replacement:
+            The assigned day shift member is unavailable on some days. Pick a replacement:
           </p>
-          {shotefSubNeeds.map((n) => (
+          {dayShiftSubNeeds.map((n) => (
             <div key={n.date} className="rounded-lg border border-gray-200 overflow-hidden">
               <div className="bg-teal-50 p-3">
                 <p className="text-sm font-medium text-gray-900">
                   {n.day_of_week}, {n.date}
                 </p>
                 <p className="text-xs text-gray-600 mt-0.5">
-                  <span className="font-medium">{n.member_name}</span> is the assigned Shotef but is unavailable: {n.reason}
+                  <span className="font-medium">{n.member_name}</span> is the assigned day shift member but is unavailable: {n.reason}
                 </p>
               </div>
               <div className="bg-indigo-50 p-3 border-t border-gray-200">
-                <p className="text-xs font-medium text-indigo-700 mb-1">Available members (by Shotef fairness):</p>
+                <p className="text-xs font-medium text-indigo-700 mb-1">Available members (by day shift fairness):</p>
                 <ul className="space-y-1">
                   {n.optional_members.map((m) => {
-                    const sd = shotefDays.find((d) => d.date === n.date);
+                    const sd = dayShiftDays.find((d) => d.date === n.date);
                     const key = `${sd?.id ?? 0}-${n.date}-${m.member_id}`;
-                    const isThis = assigningShotef === key;
+                    const isThis = assigningDayShift === key;
                     return (
                       <li key={m.member_id} className="text-xs text-indigo-900 flex items-center gap-2">
                         <button
-                          onClick={() => handleReassignShotefDay(n.date, m.member_id)}
-                          disabled={!!assigningShotef}
+                          onClick={() => handleReassignDayShiftDay(n.date, m.member_id)}
+                          disabled={!!assigningDayShift}
                           className="flex items-center gap-1 px-2 py-1 rounded-md bg-teal-600 text-white hover:bg-teal-700 disabled:opacity-50 text-[11px] font-medium shrink-0 transition-colors"
                         >
                           <UserPlus size={11} />
                           {isThis ? "Assigning..." : "Assign"}
                         </button>
                         <span className="font-medium">{m.member_name}</span>
-                        <span className="px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-600 text-[10px]">{m.shotef_count} days</span>
+                        <span className="px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-600 text-[10px]">{m.day_shift_count} days</span>
                         {m.is_unavailable && (
                           <span className="px-1.5 py-0.5 rounded bg-red-100 text-red-600 text-[10px]">unavailable</span>
                         )}

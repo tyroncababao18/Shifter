@@ -12,7 +12,7 @@ const sections: Section[] = [
     id: "overview",
     title: "Overview",
     content: `
-      <p><strong>Shifter</strong> is a fair, automated shift scheduling system for teams of any size. It handles night-shift rotation, weekend pairing, day-duty (Shotef) assignment, swap tracking, and fairness balancing — all through an intuitive web interface.</p>
+      <p><strong>Shifter</strong> is a fair, automated shift scheduling system for teams of any size. It handles night-shift rotation, weekend pairing, day shift assignment, swap tracking, and fairness balancing — all through an intuitive web interface.</p>
       <p>Use this documentation to learn how to use every feature of Shifter.</p>
     `,
   },
@@ -52,7 +52,7 @@ const sections: Section[] = [
         <li><strong>Sleeps in Building:</strong> Informational flag for your reference.</li>
         <li><strong>Leader:</strong> Leaders are excluded from auto-generated schedules but can cover shifts via swaps or manual assignment.</li>
         <li><strong>Shift Credit:</strong> Adjusts fairness for night shifts. Positive values count as extra shifts, negative as fewer. Useful when adding someone mid-rotation.</li>
-        <li><strong>Shotef Credit:</strong> Same as shift credit but for Shotef (day duty) rotation.</li>
+        <li><strong>Day Shift Credit:</strong> Same as shift credit but for day shift rotation.</li>
       </ul>
       <h4>Adding a New Member</h4>
       <p>When you add a new member, their shift credit is automatically set to the current team minimum so they start on equal footing.</p>
@@ -97,19 +97,19 @@ const sections: Section[] = [
     `,
   },
   {
-    id: "shotef",
-    title: "Shotef (Day Duty)",
+    id: "day-shifts",
+    title: "Day Shifts",
     content: `
-      <p>Shotef is a separate Sun-Thu weekly day-duty rotation. When enabled, the generator also assigns a Shotef member for each work week.</p>
+      <p>Day Shifts is a separate Sun-Thu weekly day-duty rotation. When enabled, the generator also assigns a day shift member for each work week.</p>
       <h4>How It Works</h4>
       <ul>
         <li>Each work week (Sun-Thu) is assigned to one member.</li>
-        <li>Members are sorted by their total Shotef day count for fairness.</li>
+        <li>Members are sorted by their total day shift count for fairness.</li>
         <li>If the chosen member is unavailable on specific days, the system flags those days for manual reassignment.</li>
         <li>Split-week support allows partial weeks at the start/end of months.</li>
       </ul>
-      <h4>Shotef History & Settlement</h4>
-      <p>The Shotef history panel (accessible in Reports or team settings) shows how many Shotef days each member has done. You can <strong>Settle</strong> the Shotef rotation, which resets all credits and sets a new baseline date — future fairness calculations only consider data after the settlement date.</p>
+      <h4>Day Shift History & Settlement</h4>
+      <p>The day shift history panel (accessible in Reports or team settings) shows how many day shift days each member has done. You can <strong>Settle</strong> the day shift rotation, which resets all credits and sets a new baseline date — future fairness calculations only consider data after the settlement date.</p>
     `,
   },
   {
@@ -136,7 +136,7 @@ const sections: Section[] = [
       <ul>
         <li>Navigate to any past month using the arrow buttons.</li>
         <li>Click <strong>Add Shifts</strong> to manually record shifts for a member by clicking on calendar dates.</li>
-        <li>Click <strong>Add Shotef</strong> to record past Shotef (day duty) assignments.</li>
+        <li>Click <strong>Add Day Shifts</strong> to record past day shift assignments.</li>
         <li>These historical records feed into the fairness algorithm for future schedule generation.</li>
       </ul>
     `,
@@ -153,7 +153,7 @@ const sections: Section[] = [
         <li><strong>Max Weekend Shifts:</strong> Max weekend (Fri-Sat pair) shifts per member per month.</li>
         <li><strong>Justice Lookback:</strong> How many months of history to consider for fairness. 0 = all time.</li>
         <li><strong>Min Days Between Shifts:</strong> Minimum rest gap between consecutive shifts for the same member.</li>
-        <li><strong>Shotef Enabled:</strong> Toggle the Shotef (day duty) rotation on/off.</li>
+        <li><strong>Day Shift Enabled:</strong> Toggle the day shift rotation on/off.</li>
       </ul>
     `,
   },
@@ -164,7 +164,7 @@ const sections: Section[] = [
       <p>The Reports page shows a global overview of all teams with per-member statistics.</p>
       <ul>
         <li><strong>Shift Count:</strong> Total shifts assigned to each member.</li>
-        <li><strong>Shotef Days:</strong> Total Shotef (day duty) days assigned.</li>
+        <li><strong>Day Shifts:</strong> Total day shift days assigned.</li>
         <li><strong>Credit:</strong> Manual shift credit adjustments.</li>
         <li><strong>Swap Balance:</strong> Net swap debt (positive = owes shifts).</li>
         <li><strong>Distribution Bar:</strong> Visual comparison of shift load across team members.</li>

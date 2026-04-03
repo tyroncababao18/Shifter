@@ -87,7 +87,7 @@ export default function ReportsPage() {
                       <tr className="text-xs text-gray-500 border-b border-gray-100">
                         <th className="text-left py-2 font-medium">Member</th>
                         <th className="text-right py-2 font-medium">Shifts</th>
-                        <th className="text-right py-2 font-medium">Shotef</th>
+                        <th className="text-right py-2 font-medium">Day Shifts</th>
                         <th className="text-right py-2 font-medium">Credit</th>
                         <th className="text-right py-2 font-medium" title="Positive = owes shifts, Negative = is owed shifts">Swap Bal.</th>
                         <th className="text-right py-2 font-medium w-1/4">Distribution</th>
@@ -104,7 +104,7 @@ export default function ReportsPage() {
                               <td className="py-2 text-sm text-gray-900">{m.name}</td>
                               <td className="py-2 text-sm text-gray-700 text-right font-medium">{m.shift_count}</td>
                               <td className="py-2 text-sm text-right">
-                                <span className="text-teal-700 font-medium">{m.shotef_days ?? 0}</span>
+                                <span className="text-teal-700 font-medium">{m.day_shift_days ?? 0}</span>
                               </td>
                               <td className="py-2 text-sm text-right">
                                 {m.shift_credit !== 0 ? (

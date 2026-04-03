@@ -37,6 +37,7 @@ class Member(db.Model):
     photo_url = db.Column(db.String(255), nullable=True)
     shift_credit = db.Column(db.Integer, default=0)
     shotef_credit = db.Column(db.Integer, default=0)
+    shift_weight = db.Column(db.Float, default=1.0, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -60,7 +61,8 @@ class Member(db.Model):
             "is_leader": self.is_leader,
             "photo_url": self.photo_url,
             "shift_credit": self.shift_credit,
-            "shotef_credit": self.shotef_credit,
+            "day_shift_credit": self.shotef_credit,  # DB column: shotef_credit
+            "shift_weight": self.shift_weight,
             "shift_count": shift_count if shift_count is not None else 0,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
@@ -191,4 +193,7 @@ SETTINGS_DEFAULTS = {
     "min_days_between_shifts": "1",
     "shotef_enabled": "true",
     "shotef_settled_at": "",
+    "fairness_mode": "count",
+    "min_shifts_per_month": "0",
+    "enable_rebalancing": "false",
 }

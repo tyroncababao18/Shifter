@@ -81,6 +81,15 @@ def _clear_per_request_caches():
 db.init_app(app)
 with app.app_context():
     db.create_all()
+    # Auto-migrate: add shift_weight column if missing
+    from sqlalchemy import inspect as sa_inspect
+    _inspector = sa_inspect(db.engine)
+    _member_cols = [c["name"] for c in _inspector.get_columns("members")]
+    if "shift_weight" not in _member_cols:
+        db.session.execute(db.text(
+            "ALTER TABLE members ADD COLUMN shift_weight REAL DEFAULT 1.0 NOT NULL"
+        ))
+        db.session.commit()
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
@@ -314,8 +323,10 @@ def api_update_member(member_id):
         member.is_leader = bool(data["is_leader"])
     if "shift_credit" in data:
         member.shift_credit = int(data["shift_credit"])
-    if "shotef_credit" in data:
-        member.shotef_credit = int(data["shotef_credit"])
+    if "day_shift_credit" in data:
+        member.shotef_credit = int(data["day_shift_credit"])
+    if "shift_weight" in data:
+        member.shift_weight = max(0.1, min(2.0, float(data["shift_weight"])))
     db.session.commit()
     return jsonify(member.to_dict())
 
@@ -591,13 +602,13 @@ def api_generate_schedule(team_id):
             return json_error("No members found for this team")
 
         assignments, suggestions = create_schedule(team_id, year, month)
-        shotef_assignments, shotef_needs_substitute = generate_shotef(team_id, year, month)
+        day_shift_assignments, day_shift_needs_substitute = generate_day_shifts(team_id, year, month)
 
         return jsonify({
             "assignments": assignments,
             "suggestions": suggestions,
-            "shotef_assignments": shotef_assignments,
-            "shotef_needs_substitute": shotef_needs_substitute,
+            "day_shift_assignments": day_shift_assignments,
+            "day_shift_needs_substitute": day_shift_needs_substitute,
         })
     except Exception as e:
         db.session.rollback()
@@ -605,296 +616,14 @@ def api_generate_schedule(team_id):
         return json_error(str(e), 500)
 
 
-def create_schedule(team_id, year, month):
-    all_members = Member.query.filter_by(team_id=team_id).all()
-    members = [m for m in all_members if not m.is_leader]
-    member_ids = [m.id for m in members]
-
-    max_normal = int(get_setting("max_normal_shifts", team_id))
-    max_thursday = int(get_setting("max_thursday_shifts", team_id))
-    max_weekend = int(get_setting("max_weekend_shifts", team_id))
-    lookback_months = int(get_setting("justice_lookback_months", team_id))
-    min_gap = int(get_setting("min_days_between_shifts", team_id))
-
-    _, last_day = monthrange(year, month)
-    end_date = date(year, month, last_day)
-
-    today = date.today()
-    is_current_month = (year == today.year and month == today.month)
-    gen_start = today if is_current_month else date(year, month, 1)
-
-    Shift.query.filter(
-        Shift.member_id.in_(member_ids),
-        Shift.shift_date >= gen_start,
-        Shift.shift_date <= end_date,
-    ).delete(synchronize_session="fetch")
-    db.session.flush()
-
-    unav_dict = {m.id: set() for m in members}
-    reason_dict = {}
-    all_unav = Unavailability.query.filter(
-        Unavailability.member_id.in_(member_ids),
-        extract("year", Unavailability.date) == year,
-        extract("month", Unavailability.date) == month,
-    ).all()
-    for ua in all_unav:
-        unav_dict[ua.member_id].add(ua.date)
-        reason_dict[(ua.member_id, ua.date)] = ua.reason
-
-    # ── Justice computation with shift_credit + swap debt ──
-    cutoff = None
-    if lookback_months > 0:
-        cutoff = date(year, month, 1) - timedelta(days=lookback_months * 30)
-
-    member_past_count = {}
-    member_past_weekend = {}
-    member_past_thursday = {}
-
-    for m in members:
-        base_q = Shift.query.filter(
-            Shift.member_id == m.id,
-            ~((extract("year", Shift.shift_date) == year) & (extract("month", Shift.shift_date) == month)),
-        )
-        if cutoff:
-            base_q = base_q.filter(Shift.shift_date >= cutoff)
-
-        total = base_q.count()
-
-        weekend_shifts = [s for s in base_q.all() if s.shift_date.weekday() in (4, 5)]
-        thursday_shifts = [s for s in base_q.all() if s.shift_date.weekday() == 3]
-
-        swap_q = ShiftSwap.query
-        if cutoff:
-            swap_q_covers = swap_q.join(Shift).filter(Shift.shift_date >= cutoff)
-        else:
-            swap_q_covers = swap_q
-
-        covers_done = swap_q_covers.filter(ShiftSwap.covering_member_id == m.id).count()
-        covers_received = swap_q_covers.filter(ShiftSwap.original_member_id == m.id).count()
-
-        effective = total - covers_done + covers_received + m.shift_credit
-        member_past_count[m.id] = effective
-        member_past_weekend[m.id] = len(weekend_shifts)
-        member_past_thursday[m.id] = len(thursday_shifts)
-
-    monthly_normal_count = defaultdict(int)
-    monthly_thursday_count = defaultdict(int)
-    monthly_weekend_count = defaultdict(int)
-    last_assignment_date: dict[int, date] = {}
-
-    def is_thursday(d):
-        return d.weekday() == 3
-
-    def is_weekend(d):
-        return d.weekday() in (4, 5)
-
-    def sort_key_for_type(m, day_type):
-        if day_type == "weekend":
-            type_count = member_past_weekend[m.id]
-        elif day_type == "thursday":
-            type_count = member_past_thursday[m.id]
-        else:
-            type_count = member_past_count[m.id]
-        monthly_sum = monthly_normal_count[m.id] + monthly_thursday_count[m.id] + monthly_weekend_count[m.id]
-        return (type_count, member_past_count[m.id], monthly_sum, random.random())
-
-    def check_gap(m_id, current):
-        last = last_assignment_date.get(m_id)
-        if last and (current - last).days < min_gap:
-            return False
-        return True
-
-    current_date = gen_start
-    assignments = []
-    suggestions = []
-
-    while current_date.month == month:
-        if any(a["date"] == current_date.isoformat() for a in assignments):
-            current_date += timedelta(days=1)
-            continue
-
-        day_name = current_date.strftime("%A")
-
-        # ── Friday-Saturday pair ──
-        if day_name == "Friday":
-            next_day = current_date + timedelta(days=1)
-            pair_in_month = next_day.month == month
-
-            potential = [
-                m for m in members
-                if current_date not in unav_dict[m.id]
-                and (not pair_in_month or next_day not in unav_dict[m.id])
-                and monthly_weekend_count[m.id] < max_weekend
-                and check_gap(m.id, current_date)
-            ]
-
-            if not potential:
-                fri_unav, fri_opt = _build_suggestion_info(
-                    members, current_date, unav_dict, reason_dict,
-                    monthly_normal_count, monthly_thursday_count, monthly_weekend_count,
-                    max_normal, max_thursday, max_weekend,
-                    member_past_count, last_assignment_date, min_gap,
-                )
-                suggestions.append({
-                    "date": current_date.isoformat(),
-                    "day_of_week": "Friday",
-                    "unavailable_members": fri_unav,
-                    "optional_members": fri_opt,
-                })
-                assignments.append({"date": current_date.isoformat(), "day_of_week": "Friday", "member_name": "No one available"})
-                if pair_in_month:
-                    sat_unav, sat_opt = _build_suggestion_info(
-                        members, next_day, unav_dict, reason_dict,
-                        monthly_normal_count, monthly_thursday_count, monthly_weekend_count,
-                        max_normal, max_thursday, max_weekend,
-                        member_past_count, last_assignment_date, min_gap,
-                    )
-                    suggestions.append({
-                        "date": next_day.isoformat(),
-                        "day_of_week": "Saturday",
-                        "unavailable_members": sat_unav,
-                        "optional_members": sat_opt,
-                    })
-                    assignments.append({"date": next_day.isoformat(), "day_of_week": "Saturday", "member_name": "No one available"})
-            else:
-                potential.sort(key=lambda m: sort_key_for_type(m, "weekend"))
-                chosen = potential[0]
-                assignments.append({"date": current_date.isoformat(), "day_of_week": "Friday", "member_name": chosen.name})
-                if pair_in_month:
-                    assignments.append({"date": next_day.isoformat(), "day_of_week": "Saturday", "member_name": chosen.name})
-                    member_past_count[chosen.id] += 2
-                    member_past_weekend[chosen.id] += 1
-                    monthly_weekend_count[chosen.id] += 1
-                    last_assignment_date[chosen.id] = next_day
-                else:
-                    member_past_count[chosen.id] += 1
-                    member_past_weekend[chosen.id] += 1
-                    monthly_weekend_count[chosen.id] += 1
-                    last_assignment_date[chosen.id] = current_date
-
-            current_date = (next_day if pair_in_month else current_date) + timedelta(days=1)
-            continue
-
-        # ── Saturday at start of month ──
-        if current_date.day == 1 and day_name == "Saturday":
-            prev_friday = current_date - timedelta(days=1)
-            friday_shift = (
-                Shift.query.join(Member)
-                .filter(Member.team_id == team_id, Shift.shift_date == prev_friday)
-                .first()
-            )
-            if friday_shift:
-                member = Member.query.get(friday_shift.member_id)
-                if (
-                    member
-                    and current_date not in unav_dict.get(member.id, set())
-                    and monthly_weekend_count.get(member.id, 0) < max_weekend
-                ):
-                    assignments.append({"date": current_date.isoformat(), "day_of_week": "Saturday", "member_name": member.name})
-                    monthly_weekend_count[member.id] += 1
-                    member_past_count[member.id] = member_past_count.get(member.id, 0) + 1
-                    member_past_weekend[member.id] = member_past_weekend.get(member.id, 0) + 1
-                    last_assignment_date[member.id] = current_date
-                    current_date += timedelta(days=1)
-                    continue
-
-        # ── Normal days (Sun-Thu) or unhandled Saturday ──
-        day_type = "thursday" if is_thursday(current_date) else ("weekend" if is_weekend(current_date) else "normal")
-        potential = []
-        for m in members:
-            if current_date in unav_dict[m.id]:
-                continue
-            if not check_gap(m.id, current_date):
-                continue
-            if is_thursday(current_date) and monthly_thursday_count[m.id] >= max_thursday:
-                continue
-            if not is_weekend(current_date) and not is_thursday(current_date) and monthly_normal_count[m.id] >= max_normal:
-                continue
-            potential.append(m)
-
-        if not potential:
-            day_unav, day_opt = _build_suggestion_info(
-                members, current_date, unav_dict, reason_dict,
-                monthly_normal_count, monthly_thursday_count, monthly_weekend_count,
-                max_normal, max_thursday, max_weekend,
-                member_past_count, last_assignment_date, min_gap,
-            )
-            suggestions.append({
-                "date": current_date.isoformat(),
-                "day_of_week": day_name,
-                "unavailable_members": day_unav,
-                "optional_members": day_opt,
-            })
-            assignments.append({"date": current_date.isoformat(), "day_of_week": day_name, "member_name": "No one available"})
-        else:
-            potential.sort(key=lambda m: sort_key_for_type(m, day_type))
-            chosen = potential[0]
-            assignments.append({"date": current_date.isoformat(), "day_of_week": day_name, "member_name": chosen.name})
-            if is_thursday(current_date):
-                monthly_thursday_count[chosen.id] += 1
-                member_past_thursday[chosen.id] += 1
-            elif is_weekend(current_date):
-                monthly_weekend_count[chosen.id] += 1
-                member_past_weekend[chosen.id] += 1
-            else:
-                monthly_normal_count[chosen.id] += 1
-            member_past_count[chosen.id] += 1
-            last_assignment_date[chosen.id] = current_date
-
-        current_date += timedelta(days=1)
-
-    # Persist
-    for a in assignments:
-        if a["member_name"] != "No one available":
-            dt = datetime.strptime(a["date"], "%Y-%m-%d").date()
-            member_obj = Member.query.filter_by(team_id=team_id, name=a["member_name"]).first()
-            if member_obj:
-                db.session.add(Shift(shift_date=dt, member_id=member_obj.id))
-    db.session.commit()
-
-    return assignments, suggestions
-
-
-def _build_suggestion_info(members, d, unav_dict, reason_dict,
-                           m_normal, m_thursday, m_weekend,
-                           max_normal, max_thursday, max_weekend,
-                           member_past_count, last_assignment_date, min_gap):
-    """Return (unavailable_members, optional_members) for a date with no eligible member."""
-    unavailable = []
-    optional = []
-    for m in members:
-        reasons = []
-        if d in unav_dict[m.id]:
-            reasons.append(reason_dict.get((m.id, d), "Marked unavailable"))
-        else:
-            last = last_assignment_date.get(m.id)
-            if last and (d - last).days < min_gap:
-                reasons.append(f"Min gap not met ({min_gap} day{'s' if min_gap != 1 else ''})")
-            if d.weekday() == 3 and m_thursday[m.id] >= max_thursday:
-                reasons.append(f"Reached max Thursday shifts ({max_thursday})")
-            if d.weekday() in (4, 5) and m_weekend[m.id] >= max_weekend:
-                reasons.append(f"Reached max weekend shifts ({max_weekend})")
-            if d.weekday() not in (3, 4, 5) and m_normal[m.id] >= max_normal:
-                reasons.append(f"Reached max normal shifts ({max_normal})")
-            if not reasons:
-                reasons.append("Unknown constraint")
-
-        unavailable.append({"member_name": m.name, "reason": "; ".join(reasons)})
-        optional.append({
-            "member_name": m.name,
-            "shift_count": member_past_count.get(m.id, 0),
-            "reason": "; ".join(reasons),
-        })
-
-    optional.sort(key=lambda x: x["shift_count"])
-    return unavailable, optional
+from scheduling import create_schedule  # noqa: E402 — extracted to scheduling package
 
 
 # ══════════════════════════════════════
-#  SHOTEF (DAY DUTY) GENERATION
+#  DAY SHIFT GENERATION
 # ══════════════════════════════════════
 
-def _get_shotef_week_blocks(year, month):
+def _get_day_shift_week_blocks(year, month):
     """Return list of (week_start_sunday, [days_in_month]) for Sun-Thu blocks."""
     _, last_day = monthrange(year, month)
     first = date(year, month, 1)
@@ -932,10 +661,10 @@ def _get_shotef_week_blocks(year, month):
     return blocks
 
 
-def generate_shotef(team_id, year, month):
-    """Generate Shotef (day duty) weekly rotation for a month using day-level assignments."""
-    shotef_enabled = get_setting("shotef_enabled", team_id)
-    if shotef_enabled.lower() != "true":
+def generate_day_shifts(team_id, year, month):
+    """Generate day shift weekly rotation for a month using day-level assignments."""
+    day_shift_enabled = get_setting("shotef_enabled", team_id)  # settings key unchanged for DB compat
+    if day_shift_enabled.lower() != "true":
         return [], []
 
     all_members = Member.query.filter_by(team_id=team_id).all()
@@ -947,7 +676,7 @@ def generate_shotef(team_id, year, month):
     db.session.flush()
 
     lookback_months = int(get_setting("justice_lookback_months", team_id))
-    settled_at_str = get_setting("shotef_settled_at", team_id)
+    settled_at_str = get_setting("shotef_settled_at", team_id)  # settings key unchanged for DB compat
 
     cutoff = None
     if settled_at_str:
@@ -965,10 +694,10 @@ def generate_shotef(team_id, year, month):
     )
     if cutoff:
         count_q = count_q.filter(ShotefDay.date >= cutoff)
-    shotef_counts = dict(count_q.group_by(ShotefDay.member_id).all())
+    day_shift_counts = dict(count_q.group_by(ShotefDay.member_id).all())
     for m in members:
-        shotef_counts.setdefault(m.id, 0)
-        shotef_counts[m.id] += m.shotef_credit
+        day_shift_counts.setdefault(m.id, 0)
+        day_shift_counts[m.id] += m.shotef_credit  # DB column unchanged
 
     unav_dict = {m.id: set() for m in members}
     reason_dict = {}
@@ -981,10 +710,10 @@ def generate_shotef(team_id, year, month):
         unav_dict[ua.member_id].add(ua.date)
         reason_dict[(ua.member_id, ua.date)] = ua.reason
 
-    week_blocks = _get_shotef_week_blocks(year, month)
+    week_blocks = _get_day_shift_week_blocks(year, month)
 
-    shotef_assignments = []
-    shotef_needs_substitute = []
+    day_shift_assignments = []
+    day_shift_needs_substitute = []
     assigned_this_month = set()
 
     for week_start, days in week_blocks:
@@ -992,7 +721,7 @@ def generate_shotef(team_id, year, month):
         if not eligible:
             eligible = list(members)
 
-        eligible.sort(key=lambda m: (shotef_counts.get(m.id, 0), random.random()))
+        eligible.sort(key=lambda m: (day_shift_counts.get(m.id, 0), random.random()))
         chosen = eligible[0]
         assigned_this_month.add(chosen.id)
 
@@ -1005,9 +734,9 @@ def generate_shotef(team_id, year, month):
             if d in unav_dict[chosen.id]:
                 unavailable_days.append(d)
 
-        shotef_counts[chosen.id] = shotef_counts.get(chosen.id, 0) + len(days)
+        day_shift_counts[chosen.id] = day_shift_counts.get(chosen.id, 0) + len(days)
 
-        shotef_assignments.append({
+        day_shift_assignments.append({
             "week_start": week_start.isoformat(),
             "member_name": chosen.name,
             "member_id": chosen.id,
@@ -1023,11 +752,11 @@ def generate_shotef(team_id, year, month):
                 optional.append({
                     "member_name": m.name,
                     "member_id": m.id,
-                    "shotef_count": shotef_counts.get(m.id, 0),
+                    "day_shift_count": day_shift_counts.get(m.id, 0),
                     "is_unavailable": ud in unav_dict[m.id],
                 })
-            optional.sort(key=lambda x: (x["is_unavailable"], x["shotef_count"], random.random()))
-            shotef_needs_substitute.append({
+            optional.sort(key=lambda x: (x["is_unavailable"], x["day_shift_count"], random.random()))
+            day_shift_needs_substitute.append({
                 "member_name": chosen.name,
                 "date": ud.isoformat(),
                 "day_of_week": ud.strftime("%A"),
@@ -1036,7 +765,7 @@ def generate_shotef(team_id, year, month):
             })
 
     db.session.commit()
-    return shotef_assignments, shotef_needs_substitute
+    return day_shift_assignments, day_shift_needs_substitute
 
 
 # ══════════════════════════════════════
@@ -1131,7 +860,7 @@ def api_export_schedule(team_id):
 
 @app.route("/api/teams/<int:team_id>/schedule-view", methods=["GET"])
 def api_schedule_view(team_id):
-    """Combined endpoint: team + members + shifts + shotef for one month."""
+    """Combined endpoint: team + members + shifts + day shifts for one month."""
     year = request.args.get("year", type=int)
     month = request.args.get("month", type=int)
     if not year or not month:
@@ -1170,7 +899,7 @@ def api_schedule_view(team_id):
         .all()
     )
 
-    shotef_days = (
+    day_shift_days = (
         ShotefDay.query
         .options(joinedload(ShotefDay.member))
         .filter_by(team_id=team_id, year=year, month=month)
@@ -1187,7 +916,7 @@ def api_schedule_view(team_id):
         "team": team.to_dict(member_count=len(members)),
         "members": members_data,
         "shifts": [s.to_dict() for s in shifts],
-        "shotef_days": [d.to_dict() for d in shotef_days],
+        "day_shift_days": [d.to_dict() for d in day_shift_days],
     }
     _cache_set(cache_key, result)
     return jsonify(result)
@@ -1195,7 +924,7 @@ def api_schedule_view(team_id):
 
 @app.route("/api/teams/<int:team_id>/past-shifts-view", methods=["GET"])
 def api_past_shifts_view(team_id):
-    """Combined endpoint: team + members + past shifts + shotef for one month."""
+    """Combined endpoint: team + members + past shifts + day shifts for one month."""
     year = request.args.get("year", type=int)
     month = request.args.get("month", type=int)
     if not year or not month:
@@ -1233,7 +962,7 @@ def api_past_shifts_view(team_id):
             entry["swap"] = s.swaps[0].to_dict()
         date_map[s.shift_date.isoformat()].append(entry)
 
-    shotef_days = (
+    day_shift_days = (
         ShotefDay.query
         .options(joinedload(ShotefDay.member))
         .filter_by(team_id=team_id, year=year, month=month)
@@ -1244,7 +973,7 @@ def api_past_shifts_view(team_id):
         "team": team.to_dict(member_count=len(members)),
         "members": [m.to_dict() for m in members],
         "shifts": date_map,
-        "shotef_days": [d.to_dict() for d in shotef_days],
+        "day_shift_days": [d.to_dict() for d in day_shift_days],
     }
     _cache_set(cache_key, result)
     return jsonify(result)
@@ -1404,11 +1133,11 @@ def api_update_settings():
 
 
 # ══════════════════════════════════════
-#  SHOTEF ENDPOINTS (day-level)
+#  DAY SHIFT ENDPOINTS
 # ══════════════════════════════════════
 
-@app.route("/api/teams/<int:team_id>/shotef", methods=["GET"])
-def api_get_shotef(team_id):
+@app.route("/api/teams/<int:team_id>/day-shifts", methods=["GET"])
+def api_get_day_shifts(team_id):
     Team.query.get_or_404(team_id)
     year = request.args.get("year", type=int)
     month = request.args.get("month", type=int)
@@ -1422,23 +1151,23 @@ def api_get_shotef(team_id):
         .order_by(ShotefDay.date).all()
     )
 
-    return jsonify({"shotef_days": [d.to_dict() for d in days]})
+    return jsonify({"day_shift_days": [d.to_dict() for d in days]})
 
 
-@app.route("/api/teams/<int:team_id>/shotef/reassign", methods=["POST"])
-def api_shotef_reassign(team_id):
-    """Reassign a single shotef day to a different member."""
+@app.route("/api/teams/<int:team_id>/day-shifts/reassign", methods=["POST"])
+def api_day_shift_reassign(team_id):
+    """Reassign a single day shift to a different member."""
     Team.query.get_or_404(team_id)
     data = request.get_json() or {}
-    shotef_day_id = data.get("shotef_day_id")
+    day_shift_id = data.get("day_shift_id") or data.get("shotef_day_id")  # accept both for compat
     new_member_id = data.get("member_id")
 
-    if not shotef_day_id or not new_member_id:
-        return json_error("shotef_day_id and member_id are required")
+    if not day_shift_id or not new_member_id:
+        return json_error("day_shift_id and member_id are required")
 
-    sd = ShotefDay.query.get_or_404(shotef_day_id)
+    sd = ShotefDay.query.get_or_404(day_shift_id)
     if sd.team_id != team_id:
-        return json_error("Shotef day does not belong to this team", 403)
+        return json_error("Day shift does not belong to this team", 403)
 
     Member.query.get_or_404(new_member_id)
     sd.member_id = new_member_id
@@ -1446,21 +1175,21 @@ def api_shotef_reassign(team_id):
     return jsonify(sd.to_dict())
 
 
-@app.route("/api/shotef-days/<int:sd_id>", methods=["DELETE"])
-def api_delete_shotef_day(sd_id):
+@app.route("/api/day-shift-days/<int:sd_id>", methods=["DELETE"])
+def api_delete_day_shift(sd_id):
     sd = ShotefDay.query.get_or_404(sd_id)
     db.session.delete(sd)
     db.session.commit()
-    return jsonify({"message": "Shotef day deleted"})
+    return jsonify({"message": "Day shift deleted"})
 
 
-@app.route("/api/teams/<int:team_id>/shotef-history", methods=["GET"])
-def api_shotef_history(team_id):
+@app.route("/api/teams/<int:team_id>/day-shift-history", methods=["GET"])
+def api_day_shift_history(team_id):
     Team.query.get_or_404(team_id)
     members = Member.query.filter_by(team_id=team_id).all()
     member_ids = [m.id for m in members]
 
-    settled_at_str = get_setting("shotef_settled_at", team_id)
+    settled_at_str = get_setting("shotef_settled_at", team_id)  # settings key unchanged for DB compat
 
     day_counts_q = db.session.query(ShotefDay.member_id, func.count(ShotefDay.id)).filter(
         ShotefDay.member_id.in_(member_ids)
@@ -1475,14 +1204,14 @@ def api_shotef_history(team_id):
 
     result = []
     for m in members:
-        effective = day_counts.get(m.id, 0) + m.shotef_credit
+        effective = day_counts.get(m.id, 0) + m.shotef_credit  # DB column unchanged
         result.append({
             "member_id": m.id,
             "name": m.name,
             "is_leader": m.is_leader,
-            "total_shotef_days": day_counts.get(m.id, 0),
-            "shotef_credit": m.shotef_credit,
-            "effective_shotef_count": effective,
+            "total_day_shift_days": day_counts.get(m.id, 0),
+            "day_shift_credit": m.shotef_credit,
+            "effective_day_shift_count": effective,
         })
     return jsonify({
         "history": result,
@@ -1490,12 +1219,12 @@ def api_shotef_history(team_id):
     })
 
 
-@app.route("/api/teams/<int:team_id>/shotef-settle", methods=["POST"])
-def api_shotef_settle(team_id):
-    """Settle shotef fairness: future calculations only consider data after today."""
+@app.route("/api/teams/<int:team_id>/day-shift-settle", methods=["POST"])
+def api_day_shift_settle(team_id):
+    """Settle day shift fairness: future calculations only consider data after today."""
     Team.query.get_or_404(team_id)
     today_str = date.today().isoformat()
-    existing = Settings.query.filter_by(team_id=team_id, key="shotef_settled_at").first()
+    existing = Settings.query.filter_by(team_id=team_id, key="shotef_settled_at").first()  # settings key unchanged for DB compat
     if existing:
         existing.value = today_str
     else:
@@ -1503,19 +1232,19 @@ def api_shotef_settle(team_id):
 
     members = Member.query.filter_by(team_id=team_id).all()
     for m in members:
-        m.shotef_credit = 0
+        m.shotef_credit = 0  # DB column unchanged
     db.session.commit()
     invalidate_settings_cache()
-    return jsonify({"message": "Shotef settled", "settled_at": today_str})
+    return jsonify({"message": "Day shifts settled", "settled_at": today_str})
 
 
 # ══════════════════════════════════════
-#  ADD SHOTEF DAYS (manual entry)
+#  ADD DAY SHIFT DAYS (manual entry)
 # ══════════════════════════════════════
 
-@app.route("/api/teams/<int:team_id>/shotef-days", methods=["POST"])
-def api_add_shotef_days(team_id):
-    """Add shotef day assignments for specific dates."""
+@app.route("/api/teams/<int:team_id>/day-shift-days", methods=["POST"])
+def api_add_day_shift_days(team_id):
+    """Add day shift assignments for specific dates."""
     Team.query.get_or_404(team_id)
     data = request.get_json() or {}
     member_id = data.get("member_id")
@@ -1543,7 +1272,7 @@ def api_add_shotef_days(team_id):
         ))
         added += 1
     db.session.commit()
-    return jsonify({"message": f"{added} shotef day{'s' if added != 1 else ''} added", "count": added}), 201
+    return jsonify({"message": f"{added} day shift{'s' if added != 1 else ''} added", "count": added}), 201
 
 
 # ══════════════════════════════════════
@@ -1578,7 +1307,7 @@ def api_get_reports():
         .group_by(ShiftSwap.original_member_id).all()
     ) if all_member_ids else {}
 
-    shotef_counts = dict(
+    day_shift_counts = dict(
         db.session.query(ShotefDay.member_id, func.count(ShotefDay.id))
         .filter(ShotefDay.member_id.in_(all_member_ids))
         .group_by(ShotefDay.member_id).all()
@@ -1599,7 +1328,7 @@ def api_get_reports():
             sc = shift_counts.get(m.id, 0)
             cd = covers_done.get(m.id, 0)
             cr = covers_received.get(m.id, 0)
-            sw = shotef_counts.get(m.id, 0)
+            sw = day_shift_counts.get(m.id, 0)
             team_total += sc
             member_data.append({
                 "id": m.id,
@@ -1609,7 +1338,7 @@ def api_get_reports():
                 "covers_done": cd,
                 "covers_received": cr,
                 "swap_balance": cr - cd,
-                "shotef_days": sw,
+                "day_shift_days": sw,
             })
         report.append({
             "team_id": t.id,

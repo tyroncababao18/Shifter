@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
 import { Save, RotateCcw, Settings, ShieldCheck } from "lucide-react";
-import { getSettings, updateSettings, getTeams, settleShotef, type SettingsMap, type Team } from "../api";
+import { getSettings, updateSettings, getTeams, settleDayShifts, type SettingsMap, type Team } from "../api";
 import ConfirmDialog from "../components/ConfirmDialog";
 
 interface SettingField {
@@ -47,6 +47,13 @@ const FIELDS: SettingField[] = [
     description: "Minimum number of days between consecutive shifts for the same member. 1 means no back-to-back shifts.",
     min: 0,
     max: 7,
+  },
+  {
+    key: "min_shifts_per_month",
+    label: "Min Shifts Per Month",
+    description: "Minimum number of shifts each member should have per month. 0 means no minimum. Members with limited availability are prioritized.",
+    min: 0,
+    max: 10,
   },
 ];
 
@@ -104,7 +111,7 @@ export default function AdminSettings() {
     if (selectedTeam === "global") return;
     setSettling(true);
     try {
-      const { data } = await settleShotef(selectedTeam);
+      const { data } = await settleDayShifts(selectedTeam);
       toast.success(data.message);
       setShowSettle(false);
       load();
@@ -170,10 +177,57 @@ export default function AdminSettings() {
             </div>
           ))}
 
-          {/* Shotef toggle */}
+          {/* Fairness Mode */}
           <div className="bg-white rounded-xl border border-gray-200 p-4">
             <div className="flex items-center justify-between mb-1">
-              <label className="text-sm font-semibold text-gray-900">Enable Shotef (Day Duty) Rotation</label>
+              <label className="text-sm font-semibold text-gray-900">Fairness Mode</label>
+              <select
+                value={settings.fairness_mode}
+                onChange={(e) => setSettings({ ...settings, fairness_mode: e.target.value })}
+                className="w-32 px-2 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+              >
+                <option value="count">Count</option>
+                <option value="ratio">Ratio</option>
+              </select>
+            </div>
+            <p className="text-xs text-gray-500">
+              <strong>Count</strong>: assigns based on total shift count (classic). <strong>Ratio</strong>: accounts for each member's availability — members available less often won't be overloaded.
+            </p>
+            {defaults && settings.fairness_mode !== defaults.fairness_mode && (
+              <p className="text-xs text-indigo-600 mt-1">Default: {defaults.fairness_mode}</p>
+            )}
+          </div>
+
+          {/* Rebalancing toggle */}
+          <div className="bg-white rounded-xl border border-gray-200 p-4">
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-sm font-semibold text-gray-900">Enable Rebalancing Pass</label>
+              <button
+                type="button"
+                onClick={() => setSettings({ ...settings, enable_rebalancing: settings.enable_rebalancing === "true" ? "false" : "true" })}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                  settings.enable_rebalancing === "true" ? "bg-indigo-600" : "bg-gray-300"
+                }`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                    settings.enable_rebalancing === "true" ? "translate-x-6" : "translate-x-1"
+                  }`}
+                />
+              </button>
+            </div>
+            <p className="text-xs text-gray-500">
+              When enabled, a second pass after initial scheduling attempts to swap assignments between over- and under-loaded members to improve overall fairness.
+            </p>
+            {defaults && settings.enable_rebalancing !== defaults.enable_rebalancing && (
+              <p className="text-xs text-indigo-600 mt-1">Default: {defaults.enable_rebalancing}</p>
+            )}
+          </div>
+
+          {/* Day Shift toggle */}
+          <div className="bg-white rounded-xl border border-gray-200 p-4">
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-sm font-semibold text-gray-900">Enable Day Shift Rotation</label>
               <button
                 type="button"
                 onClick={() => setSettings({ ...settings, shotef_enabled: settings.shotef_enabled === "true" ? "false" : "true" })}
@@ -189,18 +243,18 @@ export default function AdminSettings() {
               </button>
             </div>
             <p className="text-xs text-gray-500">
-              When enabled, schedule generation also assigns a Shotef (day duty) member for each work week (Sun-Thu). Leaders are excluded.
+              When enabled, schedule generation also assigns a day shift member for each work week (Sun-Thu). Leaders are excluded.
             </p>
             {defaults && settings.shotef_enabled !== defaults.shotef_enabled && (
               <p className="text-xs text-indigo-600 mt-1">Default: {defaults.shotef_enabled}</p>
             )}
           </div>
 
-          {/* Settle Shotef */}
+          {/* Settle Day Shifts */}
           {selectedTeam !== "global" && (
             <div className="bg-white rounded-xl border border-teal-200 p-4">
               <div className="flex items-center justify-between mb-1">
-                <label className="text-sm font-semibold text-gray-900">Settle Shotef Fairness</label>
+                <label className="text-sm font-semibold text-gray-900">Settle Day Shift Fairness</label>
                 <button
                   onClick={() => setShowSettle(true)}
                   className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-teal-600 text-white hover:bg-teal-700"
@@ -210,7 +264,7 @@ export default function AdminSettings() {
                 </button>
               </div>
               <p className="text-xs text-gray-500">
-                Settling resets the shotef fairness baseline to today. All shotef credits are zeroed out and future auto-generation only considers assignments after the settlement date. Use this when you want to start fresh.
+                Settling resets the day shift fairness baseline to today. All day shift credits are zeroed out and future auto-generation only considers assignments after the settlement date. Use this when you want to start fresh.
               </p>
               {settings.shotef_settled_at && (
                 <p className="text-xs text-teal-600 mt-1 font-medium">
@@ -241,8 +295,8 @@ export default function AdminSettings() {
 
       <ConfirmDialog
         open={showSettle}
-        title="Settle Shotef Fairness"
-        message="This will reset the shotef fairness baseline to today, zero out all shotef credits, and future auto-generation will only consider assignments after today. This cannot be undone."
+        title="Settle Day Shift Fairness"
+        message="This will reset the day shift fairness baseline to today, zero out all day shift credits, and future auto-generation will only consider assignments after today. This cannot be undone."
         confirmLabel={settling ? "Settling..." : "Settle"}
         onConfirm={handleSettle}
         onClose={() => setShowSettle(false)}

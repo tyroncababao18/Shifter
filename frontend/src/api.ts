@@ -19,7 +19,8 @@ export interface Member {
   is_leader: boolean;
   photo_url: string | null;
   shift_credit: number;
-  shotef_credit: number;
+  day_shift_credit: number;
+  shift_weight: number;
   shift_count: number;
   created_at: string | null;
   unavailabilities: Unavailability[];
@@ -69,6 +70,9 @@ export interface SettingsMap {
   min_days_between_shifts: string;
   shotef_enabled: string;
   shotef_settled_at: string;
+  fairness_mode: string;
+  min_shifts_per_month: string;
+  enable_rebalancing: string;
 }
 
 export interface SwapBalance {
@@ -97,11 +101,11 @@ export interface ReportMember {
   covers_done: number;
   covers_received: number;
   swap_balance: number;
-  shotef_days: number;
+  day_shift_days: number;
 }
 
-// Shotef types (day-level)
-export interface ShotefDayEntry {
+// Day Shift types (day-level)
+export interface DayShiftEntry {
   id: number;
   team_id: number;
   member_id: number;
@@ -111,7 +115,7 @@ export interface ShotefDayEntry {
   month: number;
 }
 
-export interface ShotefAssignment {
+export interface DayShiftAssignment {
   week_start: string;
   member_name: string;
   member_id: number;
@@ -119,21 +123,21 @@ export interface ShotefAssignment {
   unavailable_days: string[];
 }
 
-export interface ShotefSubNeed {
+export interface DayShiftSubNeed {
   member_name: string;
   date: string;
   day_of_week: string;
   reason: string;
-  optional_members: { member_name: string; member_id: number; shotef_count: number; is_unavailable: boolean }[];
+  optional_members: { member_name: string; member_id: number; day_shift_count: number; is_unavailable: boolean }[];
 }
 
-export interface ShotefHistoryEntry {
+export interface DayShiftHistoryEntry {
   member_id: number;
   name: string;
   is_leader: boolean;
-  total_shotef_days: number;
-  shotef_credit: number;
-  effective_shotef_count: number;
+  total_day_shift_days: number;
+  day_shift_credit: number;
+  effective_day_shift_count: number;
 }
 
 export interface ReportTeam {
@@ -170,8 +174,8 @@ export const generateSchedule = (teamId: number, year: number, month: number) =>
   api.post<{
     assignments: Assignment[];
     suggestions: Suggestion[];
-    shotef_assignments: ShotefAssignment[];
-    shotef_needs_substitute: ShotefSubNeed[];
+    day_shift_assignments: DayShiftAssignment[];
+    day_shift_needs_substitute: DayShiftSubNeed[];
   }>(`/teams/${teamId}/schedule/generate`, { year, month });
 export const getSchedule = (teamId: number, year: number, month: number) => api.get<{ shifts: ShiftEntry[] }>(`/teams/${teamId}/schedule`, { params: { year, month } });
 export const deleteSchedule = (teamId: number, year: number, month: number) => api.delete(`/teams/${teamId}/schedule`, { params: { year, month } });
@@ -191,22 +195,22 @@ export const bulkAddPastShifts = (teamId: number, memberId: number, dates: strin
 export const reassignShift = (shiftId: number, memberId: number) => api.put<ShiftEntry>(`/shifts/${shiftId}`, { member_id: memberId });
 export const deleteShift = (id: number) => api.delete(`/shifts/${id}`);
 
-// Shotef (day-level)
-export const getShotef = (teamId: number, year: number, month: number) =>
-  api.get<{ shotef_days: ShotefDayEntry[] }>(`/teams/${teamId}/shotef`, { params: { year, month } });
-export const reassignShotefDay = (teamId: number, shotefDayId: number, memberId: number) =>
-  api.post<ShotefDayEntry>(`/teams/${teamId}/shotef/reassign`, { shotef_day_id: shotefDayId, member_id: memberId });
-export const deleteShotefDay = (sdId: number) => api.delete<{ message: string }>(`/shotef-days/${sdId}`);
-export const getShotefHistory = (teamId: number) =>
-  api.get<{ history: ShotefHistoryEntry[]; settled_at: string | null }>(`/teams/${teamId}/shotef-history`);
-export const settleShotef = (teamId: number) =>
-  api.post<{ message: string; settled_at: string }>(`/teams/${teamId}/shotef-settle`);
-export const addShotefDays = (teamId: number, memberId: number, dates: string[]) =>
-  api.post<{ message: string; count: number }>(`/teams/${teamId}/shotef-days`, { member_id: memberId, dates });
+// Day Shifts (day-level)
+export const getDayShifts = (teamId: number, year: number, month: number) =>
+  api.get<{ day_shift_days: DayShiftEntry[] }>(`/teams/${teamId}/day-shifts`, { params: { year, month } });
+export const reassignDayShift = (teamId: number, dayShiftDayId: number, memberId: number) =>
+  api.post<DayShiftEntry>(`/teams/${teamId}/day-shifts/reassign`, { day_shift_day_id: dayShiftDayId, member_id: memberId });
+export const deleteDayShift = (sdId: number) => api.delete<{ message: string }>(`/day-shift-days/${sdId}`);
+export const getDayShiftHistory = (teamId: number) =>
+  api.get<{ history: DayShiftHistoryEntry[]; settled_at: string | null }>(`/teams/${teamId}/day-shift-history`);
+export const settleDayShifts = (teamId: number) =>
+  api.post<{ message: string; settled_at: string }>(`/teams/${teamId}/day-shift-settle`);
+export const addDayShiftDays = (teamId: number, memberId: number, dates: string[]) =>
+  api.post<{ message: string; count: number }>(`/teams/${teamId}/day-shift-days`, { member_id: memberId, dates });
 
 // Combined view endpoints (performance)
 export const getScheduleView = (teamId: number, year: number, month: number) =>
-  api.get<{ team: Team; members: Member[]; shifts: ShiftEntry[]; shotef_days: ShotefDayEntry[] }>(
+  api.get<{ team: Team; members: Member[]; shifts: ShiftEntry[]; day_shift_days: DayShiftEntry[] }>(
     `/teams/${teamId}/schedule-view`, { params: { year, month } }
   );
 export const getPastShiftsView = (teamId: number, year: number, month: number) =>
@@ -214,7 +218,7 @@ export const getPastShiftsView = (teamId: number, year: number, month: number) =
     team: Team;
     members: Member[];
     shifts: Record<string, { member_name: string; member_id: number; shift_id: number; swap?: ShiftSwapRecord }[]>;
-    shotef_days: ShotefDayEntry[];
+    day_shift_days: DayShiftEntry[];
   }>(`/teams/${teamId}/past-shifts-view`, { params: { year, month } });
 
 // Settings

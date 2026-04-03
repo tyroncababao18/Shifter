@@ -37,7 +37,8 @@ export default function TeamDetail() {
   const [editSleeps, setEditSleeps] = useState(false);
   const [editIsLeader, setEditIsLeader] = useState(false);
   const [editCredit, setEditCredit] = useState(0);
-  const [editShotefCredit, setEditShotefCredit] = useState(0);
+  const [editDayShiftCredit, setEditDayShiftCredit] = useState(0);
+  const [editWeight, setEditWeight] = useState(1.0);
 
   const [deleteTarget, setDeleteTarget] = useState<Member | null>(null);
 
@@ -85,7 +86,8 @@ export default function TeamDetail() {
         sleeps_in_building: editSleeps,
         is_leader: editIsLeader,
         shift_credit: editCredit,
-        shotef_credit: editShotefCredit,
+        day_shift_credit: editDayShiftCredit,
+        shift_weight: editWeight,
       });
       toast.success("Member updated");
       setEditMember(null);
@@ -231,9 +233,9 @@ export default function TeamDetail() {
                             Shift: {m.shift_credit > 0 ? "+" : ""}{m.shift_credit}
                           </span>
                         )}
-                        {m.shotef_credit !== 0 && (
-                          <span className="px-1.5 py-0.5 bg-teal-50 text-teal-600 rounded" title="Shotef credit adjusts day duty fairness">
-                            Shotef: {m.shotef_credit > 0 ? "+" : ""}{m.shotef_credit}
+                        {m.day_shift_credit !== 0 && (
+                          <span className="px-1.5 py-0.5 bg-teal-50 text-teal-600 rounded" title="Day Shift credit adjusts day shift fairness">
+                            Day Shift: {m.day_shift_credit > 0 ? "+" : ""}{m.day_shift_credit}
                           </span>
                         )}
                         {m.sleeps_in_building && (
@@ -256,7 +258,7 @@ export default function TeamDetail() {
                   </div>
                   <div className="flex items-center gap-1">
                     <button
-                      onClick={() => { setEditMember(m); setEditName(m.name); setEditSleeps(m.sleeps_in_building); setEditIsLeader(m.is_leader); setEditCredit(m.shift_credit); setEditShotefCredit(m.shotef_credit); }}
+                      onClick={() => { setEditMember(m); setEditName(m.name); setEditSleeps(m.sleeps_in_building); setEditIsLeader(m.is_leader); setEditCredit(m.shift_credit); setEditDayShiftCredit(m.day_shift_credit); setEditWeight(m.shift_weight ?? 1.0); }}
                       className="p-1.5 rounded-md text-gray-400 hover:text-indigo-600 hover:bg-indigo-50"
                       title="Edit member"
                     >
@@ -346,7 +348,7 @@ export default function TeamDetail() {
               Leaders are excluded from auto-generated schedules but can still cover shifts via swaps or manual assignment.
             </p>
           )}
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-3 gap-3">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Shift Credit</label>
               <input
@@ -358,14 +360,27 @@ export default function TeamDetail() {
               <p className="text-xs text-gray-500 mt-1">Adjusts night shift fairness.</p>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Shotef Credit</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Day Shift Credit</label>
               <input
                 type="number"
-                value={editShotefCredit}
-                onChange={(e) => setEditShotefCredit(Number(e.target.value))}
+                value={editDayShiftCredit}
+                onChange={(e) => setEditDayShiftCredit(Number(e.target.value))}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500 focus:border-teal-500 outline-none"
               />
-              <p className="text-xs text-gray-500 mt-1">Adjusts shotef (day duty) fairness.</p>
+              <p className="text-xs text-gray-500 mt-1">Adjusts day shift fairness.</p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Shift Weight</label>
+              <input
+                type="number"
+                step="0.1"
+                min="0.1"
+                max="2.0"
+                value={editWeight}
+                onChange={(e) => setEditWeight(Number(e.target.value))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+              />
+              <p className="text-xs text-gray-500 mt-1">1.0 = full load, 0.5 = half.</p>
             </div>
           </div>
           <div className="flex justify-end gap-3 pt-2">

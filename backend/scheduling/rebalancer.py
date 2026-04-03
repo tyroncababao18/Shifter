@@ -12,6 +12,8 @@ def _compute_burden(ms: MemberState) -> float:
 
 def _can_assign(ms: MemberState, d: date, config: ScheduleConfig, unav_dict: dict[int, set]) -> bool:
     """Check if member can take a shift on date d (availability + caps + gap)."""
+    if d.weekday() not in config.active_days:
+        return False
     if d in unav_dict.get(ms.member_id, set()):
         return False
     if ms.last_assigned and (d - ms.last_assigned).days < config.min_gap:

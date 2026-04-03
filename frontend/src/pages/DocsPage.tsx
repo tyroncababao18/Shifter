@@ -189,6 +189,12 @@ const sections: Section[] = [
         <li><strong>Min Days Between Shifts:</strong> Minimum rest gap between consecutive shifts for the same member.</li>
         <li><strong>Min Shifts Per Month:</strong> Minimum number of shifts each member should receive. Members with limited availability are prioritized first.</li>
       </ul>
+      <h4>Active Shift Days</h4>
+      <ul>
+        <li><strong>Active Days:</strong> Configure which days of the week are active for shift scheduling. Choose from presets (Full Week, Work Week Sun-Thu) or toggle individual days.</li>
+        <li>Inactive days are completely skipped during schedule generation and appear muted in the calendar view.</li>
+        <li>If only Friday or only Saturday is active (not both), the weekend pair logic degrades gracefully to a standalone shift.</li>
+      </ul>
       <h4>Fairness & Algorithm</h4>
       <ul>
         <li><strong>Justice Lookback:</strong> How many months of history to consider for fairness. 0 = all time.</li>

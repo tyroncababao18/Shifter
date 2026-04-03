@@ -226,6 +226,65 @@ export default function AdminSettings() {
             )}
           </div>
 
+          {/* Active Shift Days */}
+          <div className="bg-white rounded-xl border border-gray-200 p-4">
+            <label className="text-sm font-semibold text-gray-900 mb-2 block">Active Shift Days</label>
+            <div className="flex gap-2 mb-3">
+              {([
+                { label: "Full Week", days: "0,1,2,3,4,5,6" },
+                { label: "Work Week (Sun-Thu)", days: "6,0,1,2,3" },
+              ] as const).map((preset) => {
+                const current = new Set((settings.active_days || "0,1,2,3,4,5,6").split(",").map(Number));
+                const presetSet = new Set(preset.days.split(",").map(Number));
+                const isActive = current.size === presetSet.size && [...current].every((d) => presetSet.has(d));
+                return (
+                  <button
+                    key={preset.label}
+                    onClick={() => setSettings({ ...settings, active_days: preset.days })}
+                    className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
+                      isActive
+                        ? "bg-indigo-600 text-white border-indigo-600"
+                        : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
+                    }`}
+                  >
+                    {preset.label}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="flex gap-1.5">
+              {(["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const).map((dayLabel, idx) => {
+                const weekday = [6, 0, 1, 2, 3, 4, 5][idx];
+                const current = new Set((settings.active_days || "0,1,2,3,4,5,6").split(",").map(Number));
+                const isOn = current.has(weekday);
+                return (
+                  <button
+                    key={dayLabel}
+                    onClick={() => {
+                      const next = new Set(current);
+                      if (isOn) next.delete(weekday);
+                      else next.add(weekday);
+                      setSettings({ ...settings, active_days: [...next].join(",") });
+                    }}
+                    className={`flex-1 py-2 text-xs font-medium rounded-lg border transition-colors ${
+                      isOn
+                        ? "bg-indigo-100 text-indigo-700 border-indigo-300"
+                        : "bg-gray-50 text-gray-400 border-gray-200"
+                    }`}
+                  >
+                    {dayLabel}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="text-xs text-gray-500 mt-2">
+              Schedule generation only creates shifts on active days. Inactive days are skipped entirely.
+            </p>
+            {defaults && settings.active_days !== defaults.active_days && (
+              <p className="text-xs text-indigo-600 mt-1">Default: {defaults.active_days}</p>
+            )}
+          </div>
+
           {/* Day Shift toggle */}
           <div className="bg-white rounded-xl border border-gray-200 p-4">
             <div className="flex items-center justify-between mb-1">

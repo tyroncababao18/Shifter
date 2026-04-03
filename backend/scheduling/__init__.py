@@ -35,6 +35,9 @@ def create_schedule(team_id, year, month, get_all_settings_fn=None):
     members = [m for m in all_members if not m.is_leader]
     member_ids = [m.id for m in members]
 
+    active_days_str = all_settings.get("active_days", "0,1,2,3,4,5,6")
+    active_days = set(int(x) for x in active_days_str.split(",") if x.strip())
+
     config = ScheduleConfig(
         max_normal=int(all_settings.get("max_normal_shifts", "6")),
         max_thursday=int(all_settings.get("max_thursday_shifts", "1")),
@@ -44,6 +47,7 @@ def create_schedule(team_id, year, month, get_all_settings_fn=None):
         fairness_mode=all_settings.get("fairness_mode", "count"),
         min_shifts=int(all_settings.get("min_shifts_per_month", "0")),
         enable_rebalancing=all_settings.get("enable_rebalancing", "false") == "true",
+        active_days=active_days,
     )
 
     _, last_day = monthrange(year, month)
@@ -104,10 +108,16 @@ def create_schedule(team_id, year, month, get_all_settings_fn=None):
 
         effective = total - covers_done + covers_received + m.shift_credit
 
-        # Count available days in this month
-        total_days_in_month = last_day - gen_start.day + 1
-        unavailable_count = len([d for d in unav_dict[m.id] if d >= gen_start])
-        available_days = max(1, total_days_in_month - unavailable_count)
+        # Count available days in this month (only active days)
+        active_days_in_range = sum(
+            1 for day_num in range(gen_start.day, last_day + 1)
+            if date(year, month, day_num).weekday() in config.active_days
+        )
+        unavailable_count = len([
+            d for d in unav_dict[m.id]
+            if d >= gen_start and d.weekday() in config.active_days
+        ])
+        available_days = max(1, active_days_in_range - unavailable_count)
 
         states[m.id] = MemberState(
             member_id=m.id,
@@ -122,11 +132,12 @@ def create_schedule(team_id, year, month, get_all_settings_fn=None):
     # Select sort function based on fairness mode
     sort_fn = get_sort_fn(config.fairness_mode)
 
-    # Build list of all dates to schedule
+    # Build list of all dates to schedule (only active days)
     all_dates = []
     d = gen_start
     while d.month == month:
-        all_dates.append(d)
+        if d.weekday() in config.active_days:
+            all_dates.append(d)
         d += timedelta(days=1)
 
     # Minimum participation pre-pass
@@ -139,6 +150,11 @@ def create_schedule(team_id, year, month, get_all_settings_fn=None):
     name_to_id = {m.name: m.id for m in members}
 
     while current_date.month == month:
+        # Skip inactive days
+        if current_date.weekday() not in config.active_days:
+            current_date += timedelta(days=1)
+            continue
+
         if any(a["date"] == current_date.isoformat() for a in assignments):
             current_date += timedelta(days=1)
             continue
@@ -157,7 +173,8 @@ def create_schedule(team_id, year, month, get_all_settings_fn=None):
         # ── Friday-Saturday pair ──
         if day_name == "Friday":
             next_day = current_date + timedelta(days=1)
-            pair_in_month = next_day.month == month
+            sat_active = 5 in config.active_days  # Saturday weekday() == 5
+            pair_in_month = next_day.month == month and sat_active
 
             potential = [
                 states[m.id] for m in members

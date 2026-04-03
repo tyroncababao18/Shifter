@@ -52,6 +52,8 @@ Configure shift caps, rest gaps, fairness mode, and algorithm behavior — globa
 - **Day shifts** — optional weekly Sun-Thu day shift rotation with independent fairness tracking
 - **Night shifts** — the core scheduling: daily night shift assignments with weekend pairing (Fri-Sat)
 - **Shift swaps** — trade shifts between members with automatic debt tracking
+- **Leave management** — formal leave request workflow with vacation, sick, and personal types; approval/rejection by admins; approved leave auto-blocks scheduling
+- **Recurring unavailability** — define weekly or biweekly patterns (e.g., "every Wednesday") and apply them each month with one click
 - **Availability management** — members mark unavailable dates; the scheduler works around them
 - **Weekend pairing** — Friday-Saturday shifts are automatically assigned to the same member
 - **Past shift import** — backfill historical data so the algorithm has full context
@@ -60,6 +62,33 @@ Configure shift caps, rest gaps, fairness mode, and algorithm behavior — globa
 - **Random picker** — utility for ad-hoc random member selection
 - **Modern UI** — responsive React app with Tailwind CSS
 - **REST API** — clean JSON API, easy to integrate with other tools
+
+---
+
+## Leave Management
+
+Shifter includes a full leave request workflow so team members can formally request time off, and admins can approve or reject.
+
+### How It Works
+
+1. **Submit** — any team member submits a leave request (vacation, sick, or personal) with a date range and optional notes
+2. **Review** — team admins see pending requests on the Team Detail page and can approve or reject with review notes
+3. **Auto-block** — approved leave automatically creates unavailability records, so the scheduling algorithm skips those days
+4. **Revoke** — admins can revoke approved leave, which removes the associated unavailabilities
+
+### Partial-Day Requests
+
+Single-day leave can be marked as morning-only or afternoon-only for half-day absences.
+
+### Recurring Unavailability
+
+For regular commitments (e.g., weekly class every Wednesday), members can define recurring patterns:
+- **Weekly** or **Biweekly** frequency
+- Apply patterns to the current month with one click to generate all matching unavailability dates
+
+### Calendar Integration
+
+Approved leave appears on the Schedule calendar with color-coded badges — blue for vacation, rose for sick, orange for personal.
 
 ---
 
@@ -187,6 +216,7 @@ shifter/
 │   │   ├── constraints.py  # Eligibility filters, min participation
 │   │   └── rebalancer.py   # Post-pass rebalancing algorithm
 │   ├── seed_test_data.py   # Test data seeder
+│   ├── test_leave.py       # Leave management tests
 │   └── requirements.txt    # Python dependencies
 ├── frontend/
 │   ├── src/

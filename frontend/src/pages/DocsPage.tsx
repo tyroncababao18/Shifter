@@ -108,6 +108,64 @@ const sections: Section[] = [
     `,
   },
   {
+    id: "leave-management",
+    title: "Leave Management",
+    content: `
+      <p>Leave Management provides a formal workflow for vacation, sick, and personal leave requests. Approved leave automatically blocks scheduling — no manual unavailability marking needed.</p>
+      <h4>Leave Types</h4>
+      <ul>
+        <li><strong>Vacation:</strong> Planned time off (holiday, travel, etc.).</li>
+        <li><strong>Sick:</strong> Illness or medical leave.</li>
+        <li><strong>Personal:</strong> Personal day or other reasons.</li>
+      </ul>
+      <h4>Submitting a Leave Request</h4>
+      <ol>
+        <li>Navigate to a team's <strong>Leave</strong> page (via the team header or the Leave button on the Team Detail page).</li>
+        <li>Click <strong>New Request</strong>.</li>
+        <li>Select the member, leave type, start date, and end date.</li>
+        <li>For single-day requests, you can optionally choose <strong>Partial Day</strong> (morning or afternoon only).</li>
+        <li>Add optional notes explaining the reason.</li>
+        <li>Submit — the request starts in <strong>Pending</strong> status.</li>
+      </ol>
+      <h4>Approval Workflow</h4>
+      <ul>
+        <li>Pending requests appear in the <strong>"Awaiting Review"</strong> section on the Team Detail page for quick access.</li>
+        <li><strong>Team Admins</strong> and above can <strong>approve</strong> or <strong>reject</strong> requests with optional review notes.</li>
+        <li>Employees can only submit and cancel their own pending requests — they cannot approve or reject.</li>
+        <li>When a request is <strong>approved</strong>, unavailability records are automatically created for each day in the date range, with the leave type recorded.</li>
+        <li>When a request is <strong>rejected</strong>, no unavailabilities are created.</li>
+      </ul>
+      <h4>Cancelling & Revoking</h4>
+      <ul>
+        <li><strong>Cancel:</strong> Employees can cancel their own pending requests before they are reviewed.</li>
+        <li><strong>Revoke:</strong> Admins can revoke an already-approved request, which automatically removes all associated unavailability records.</li>
+      </ul>
+      <h4>Calendar Integration</h4>
+      <p>Approved leave shows up on the Schedule calendar with color-coded badges: <strong>blue</strong> for vacation, <strong>rose</strong> for sick, and <strong>orange</strong> for personal leave. The scheduling algorithm automatically avoids assigning shifts on leave days.</p>
+      <h4>Filtering & Status</h4>
+      <p>On the Leave page, use the status filter tabs (All, Pending, Approved, Rejected) to quickly find requests. Each tab shows a count badge so you can see how many requests are in each state at a glance.</p>
+    `,
+  },
+  {
+    id: "recurring-unavailability",
+    title: "Recurring Unavailability",
+    content: `
+      <p>Recurring unavailability patterns let members define regular days they can't work — like a weekly class or a biweekly commitment — without manually marking each date every month.</p>
+      <h4>Creating a Pattern</h4>
+      <ol>
+        <li>Open the <strong>Leave</strong> page for a team.</li>
+        <li>Click <strong>Recurring Patterns</strong>.</li>
+        <li>Select the member and choose the day of the week (Sunday through Saturday).</li>
+        <li>Set the frequency: <strong>Weekly</strong> (every week) or <strong>Biweekly</strong> (every other week).</li>
+        <li>Optionally add a reason (e.g., "University class").</li>
+      </ol>
+      <h4>Applying Patterns</h4>
+      <p>Click <strong>Apply to Current Month</strong> to generate unavailability records for all matching dates in the current month. You can apply patterns each month before generating the schedule.</p>
+      <h4>Managing Patterns</h4>
+      <p>Patterns persist until you delete them. You can view all active patterns per member and remove any that are no longer relevant.</p>
+    `,
+  },
+  {
     id: "schedule-generation",
     title: "Schedule Generation",
     content: `

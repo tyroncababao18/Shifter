@@ -13,6 +13,7 @@ import AdminSettings from "./pages/AdminSettings";
 import ReportsPage from "./pages/ReportsPage";
 import DocsPage from "./pages/DocsPage";
 import PickerPage from "./pages/PickerPage";
+import LeaveManagementPage from "./pages/LeaveManagementPage";
 import OrganizationsPage from "./pages/admin/OrganizationsPage";
 import OrgDetailPage from "./pages/admin/OrgDetailPage";
 import UsersPage from "./pages/admin/UsersPage";
@@ -34,6 +35,7 @@ export default function App() {
               <Route path="/teams/:teamId" element={<TeamDetail />} />
               <Route path="/teams/:teamId/schedule" element={<SchedulePage />} />
               <Route path="/teams/:teamId/past-shifts" element={<PastShiftsPage />} />
+              <Route path="/teams/:teamId/leave" element={<LeaveManagementPage />} />
               <Route path="/settings" element={<AdminSettings />} />
               <Route path="/reports" element={<ReportsPage />} />
               <Route path="/docs" element={<DocsPage />} />

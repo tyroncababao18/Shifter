@@ -383,10 +383,18 @@ export default function SchedulePage() {
                       <div className="flex flex-wrap gap-1.5 mb-1">
                         {mUnavs
                           .sort((a, b) => a.date.localeCompare(b.date))
-                          .map((u) => (
+                          .map((u) => {
+                            const leaveColors = u.leave_type === "vacation"
+                              ? "bg-blue-50 text-blue-700"
+                              : u.leave_type === "sick"
+                              ? "bg-rose-50 text-rose-700"
+                              : u.leave_type === "personal"
+                              ? "bg-orange-50 text-orange-700"
+                              : "bg-red-50 text-red-700";
+                            return (
                           <span
                             key={u.id}
-                            className="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-red-50 text-red-700 group"
+                            className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full ${leaveColors} group`}
                           >
                             {dayjs(u.date).format("ddd D")}
                             {u.reason ? ` — ${u.reason}` : ""}
@@ -397,7 +405,8 @@ export default function SchedulePage() {
                               <X size={10} />
                             </button>
                           </span>
-                        ))}
+                            );
+                        })}
                       </div>
                     )}
                   </div>

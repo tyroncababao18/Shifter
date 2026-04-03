@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import {
-  Plus, Trash2, Edit3, Calendar, Clock, ChevronLeft, Pencil,
+  Plus, Trash2, Edit3, Calendar, Clock, ChevronLeft, Pencil, CalendarOff,
 } from "lucide-react";
 import {
   getTeam, createMember, updateMember, deleteMember, deleteTeam, updateTeam,
@@ -181,6 +181,12 @@ export default function TeamDetail() {
               className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50"
             >
               <Clock size={16} /> Past Shifts
+            </Link>
+            <Link
+              to={`/teams/${id}/leave`}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50"
+            >
+              <CalendarOff size={16} /> Leave
             </Link>
             <button
               onClick={() => setShowDeleteTeam(true)}

@@ -20,6 +20,7 @@ from models import (
     db, User, Organization, OrganizationMembership, TeamMembership,
     Team, Member, Unavailability, Shift, ShiftSwap, Settings,
     ShotefDay, SETTINGS_DEFAULTS,
+    LeaveRequest, RecurringUnavailability, LEAVE_TYPES, LEAVE_STATUSES,
 )
 from auth import login_required, is_shifter_admin, is_team_admin, is_team_member, get_accessible_team_ids
 
@@ -117,6 +118,19 @@ with app.app_context():
             db.session.commit()
         except Exception:
             db.session.rollback()
+
+    # Add leave_type and leave_request_id to unavailability if missing
+    _unav_cols = [c["name"] for c in _inspector.get_columns("unavailability")]
+    if "leave_type" not in _unav_cols:
+        db.session.execute(db.text(
+            "ALTER TABLE unavailability ADD COLUMN leave_type VARCHAR(30)"
+        ))
+        db.session.commit()
+    if "leave_request_id" not in _unav_cols:
+        db.session.execute(db.text(
+            "ALTER TABLE unavailability ADD COLUMN leave_request_id INTEGER REFERENCES leave_requests(id)"
+        ))
+        db.session.commit()
 
     # Auto-seed: create default admin if no users exist
     if User.query.count() == 0:
@@ -1467,6 +1481,296 @@ def api_get_reports():
     }
     _cache_set(cache_key, result)
     return jsonify(result)
+
+
+# ══════════════════════════════════════
+#  LEAVE REQUESTS API
+# ══════════════════════════════════════
+
+@app.route("/api/teams/<int:team_id>/leave-requests", methods=["GET"])
+@login_required
+def api_get_leave_requests(team_id):
+    """Get leave requests for a team. Admins see all, employees see own."""
+    from flask import g
+    team = Team.query.get_or_404(team_id)
+    if not is_team_member(g.current_user, team_id):
+        return jsonify({"error": "Access denied"}), 403
+
+    query = LeaveRequest.query.filter_by(team_id=team_id)
+
+    status_filter = request.args.get("status")
+    if status_filter and status_filter in LEAVE_STATUSES:
+        query = query.filter_by(status=status_filter)
+
+    member_id_filter = request.args.get("member_id")
+    if member_id_filter:
+        query = query.filter_by(member_id=int(member_id_filter))
+
+    requests_list = query.order_by(LeaveRequest.created_at.desc()).all()
+    return jsonify({"leave_requests": [r.to_dict() for r in requests_list]})
+
+
+@app.route("/api/teams/<int:team_id>/leave-requests", methods=["POST"])
+@login_required
+def api_create_leave_request(team_id):
+    """Submit a new leave request."""
+    from flask import g
+    team = Team.query.get_or_404(team_id)
+    if not is_team_member(g.current_user, team_id):
+        return jsonify({"error": "Access denied"}), 403
+
+    data = request.get_json() or {}
+    member_id = data.get("member_id")
+    leave_type = data.get("leave_type", "")
+    start_date_str = data.get("start_date", "")
+    end_date_str = data.get("end_date", "")
+    partial_day = data.get("partial_day")
+    notes = data.get("notes", "")
+
+    if not member_id:
+        return json_error("member_id is required")
+    member = Member.query.get_or_404(member_id)
+    if member.team_id != team_id:
+        return json_error("Member does not belong to this team")
+    if leave_type not in LEAVE_TYPES:
+        return json_error(f"leave_type must be one of: {', '.join(LEAVE_TYPES)}")
+    if not start_date_str or not end_date_str:
+        return json_error("start_date and end_date are required")
+
+    try:
+        start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+        end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
+    except ValueError:
+        return json_error("Invalid date format, use YYYY-MM-DD")
+
+    if end_date < start_date:
+        return json_error("end_date must be >= start_date")
+    if partial_day and partial_day not in ("morning", "afternoon"):
+        return json_error("partial_day must be 'morning' or 'afternoon'")
+    if partial_day and start_date != end_date:
+        return json_error("partial_day is only allowed for single-day requests")
+
+    lr = LeaveRequest(
+        member_id=member_id,
+        team_id=team_id,
+        leave_type=leave_type,
+        start_date=start_date,
+        end_date=end_date,
+        partial_day=partial_day,
+        notes=notes,
+        requested_by_user_id=g.current_user.id,
+    )
+    db.session.add(lr)
+    db.session.commit()
+    _cache_clear_team(team_id)
+    return jsonify(lr.to_dict()), 201
+
+
+@app.route("/api/leave-requests/<int:lr_id>", methods=["GET"])
+@login_required
+def api_get_leave_request(lr_id):
+    lr = LeaveRequest.query.get_or_404(lr_id)
+    return jsonify(lr.to_dict())
+
+
+@app.route("/api/leave-requests/<int:lr_id>", methods=["DELETE"])
+@login_required
+def api_cancel_leave_request(lr_id):
+    """Cancel a pending leave request."""
+    from flask import g
+    lr = LeaveRequest.query.get_or_404(lr_id)
+    if lr.status != "pending":
+        # Admins can revoke approved requests
+        if lr.status == "approved" and is_team_admin(g.current_user, lr.team_id):
+            # Remove associated unavailabilities
+            Unavailability.query.filter_by(leave_request_id=lr.id).delete()
+            db.session.delete(lr)
+            db.session.commit()
+            _cache_clear_team(lr.team_id)
+            return jsonify({"message": "Approved leave revoked and unavailabilities removed"})
+        return json_error("Only pending requests can be cancelled")
+
+    if not is_team_member(g.current_user, lr.team_id):
+        return jsonify({"error": "Access denied"}), 403
+
+    db.session.delete(lr)
+    db.session.commit()
+    _cache_clear_team(lr.team_id)
+    return jsonify({"message": "Leave request cancelled"})
+
+
+@app.route("/api/leave-requests/<int:lr_id>/approve", methods=["POST"])
+@login_required
+def api_approve_leave_request(lr_id):
+    """Approve a leave request and create unavailability records."""
+    from flask import g
+    lr = LeaveRequest.query.get_or_404(lr_id)
+    if not is_team_admin(g.current_user, lr.team_id):
+        return jsonify({"error": "Team admin access required"}), 403
+    if lr.status != "pending":
+        return json_error(f"Request is already {lr.status}")
+
+    data = request.get_json() or {}
+    lr.status = "approved"
+    lr.reviewed_by_user_id = g.current_user.id
+    lr.reviewed_at = datetime.utcnow()
+    lr.review_notes = data.get("review_notes", "")
+
+    # Create unavailability records for each date in range
+    current = lr.start_date
+    reason_label = lr.leave_type.capitalize()
+    if lr.partial_day:
+        reason_label += f" ({lr.partial_day})"
+    while current <= lr.end_date:
+        existing = Unavailability.query.filter_by(member_id=lr.member_id, date=current).first()
+        if existing:
+            existing.reason = reason_label
+            existing.leave_type = lr.leave_type
+            existing.leave_request_id = lr.id
+        else:
+            db.session.add(Unavailability(
+                member_id=lr.member_id,
+                date=current,
+                reason=reason_label,
+                leave_type=lr.leave_type,
+                leave_request_id=lr.id,
+            ))
+        current += timedelta(days=1)
+
+    db.session.commit()
+    _cache_clear_team(lr.team_id)
+    return jsonify(lr.to_dict())
+
+
+@app.route("/api/leave-requests/<int:lr_id>/reject", methods=["POST"])
+@login_required
+def api_reject_leave_request(lr_id):
+    """Reject a leave request."""
+    from flask import g
+    lr = LeaveRequest.query.get_or_404(lr_id)
+    if not is_team_admin(g.current_user, lr.team_id):
+        return jsonify({"error": "Team admin access required"}), 403
+    if lr.status != "pending":
+        return json_error(f"Request is already {lr.status}")
+
+    data = request.get_json() or {}
+    lr.status = "rejected"
+    lr.reviewed_by_user_id = g.current_user.id
+    lr.reviewed_at = datetime.utcnow()
+    lr.review_notes = data.get("review_notes", "")
+
+    db.session.commit()
+    _cache_clear_team(lr.team_id)
+    return jsonify(lr.to_dict())
+
+
+# ══════════════════════════════════════
+#  RECURRING UNAVAILABILITIES API
+# ══════════════════════════════════════
+
+@app.route("/api/members/<int:member_id>/recurring-unavailabilities", methods=["GET"])
+@login_required
+def api_get_recurring_unavailabilities(member_id):
+    Member.query.get_or_404(member_id)
+    items = RecurringUnavailability.query.filter_by(member_id=member_id).all()
+    return jsonify({"recurring_unavailabilities": [r.to_dict() for r in items]})
+
+
+@app.route("/api/members/<int:member_id>/recurring-unavailabilities", methods=["POST"])
+@login_required
+def api_create_recurring_unavailability(member_id):
+    member = Member.query.get_or_404(member_id)
+    data = request.get_json() or {}
+
+    day_of_week = data.get("day_of_week")
+    if day_of_week is None or not (0 <= int(day_of_week) <= 6):
+        return json_error("day_of_week must be 0-6 (Sunday=0)")
+    frequency = data.get("frequency", "weekly")
+    if frequency not in ("weekly", "biweekly"):
+        return json_error("frequency must be 'weekly' or 'biweekly'")
+
+    start_date = None
+    end_date = None
+    if data.get("start_date"):
+        try:
+            start_date = datetime.strptime(data["start_date"], "%Y-%m-%d").date()
+        except ValueError:
+            return json_error("Invalid start_date format")
+    if data.get("end_date"):
+        try:
+            end_date = datetime.strptime(data["end_date"], "%Y-%m-%d").date()
+        except ValueError:
+            return json_error("Invalid end_date format")
+
+    rec = RecurringUnavailability(
+        member_id=member_id,
+        day_of_week=int(day_of_week),
+        frequency=frequency,
+        start_date=start_date,
+        end_date=end_date,
+        reason=data.get("reason", ""),
+    )
+    db.session.add(rec)
+    db.session.commit()
+    _cache_clear_team(member.team_id)
+    return jsonify(rec.to_dict()), 201
+
+
+@app.route("/api/recurring-unavailabilities/<int:rec_id>", methods=["DELETE"])
+@login_required
+def api_delete_recurring_unavailability(rec_id):
+    rec = RecurringUnavailability.query.get_or_404(rec_id)
+    team_id = rec.member.team_id
+    db.session.delete(rec)
+    db.session.commit()
+    _cache_clear_team(team_id)
+    return jsonify({"message": "Recurring unavailability deleted"})
+
+
+@app.route("/api/members/<int:member_id>/recurring-unavailabilities/apply", methods=["POST"])
+@login_required
+def api_apply_recurring_unavailabilities(member_id):
+    """Generate unavailability records from recurring patterns for a given month."""
+    member = Member.query.get_or_404(member_id)
+    data = request.get_json() or {}
+    year = data.get("year", datetime.now().year)
+    month = data.get("month", datetime.now().month)
+
+    patterns = RecurringUnavailability.query.filter_by(member_id=member_id).all()
+    if not patterns:
+        return jsonify({"message": "No recurring patterns", "count": 0})
+
+    _, days_in_month = monthrange(year, month)
+    added = 0
+    for day_num in range(1, days_in_month + 1):
+        d = date(year, month, day_num)
+        # Python weekday: Monday=0, Sunday=6. Convert to our format: Sunday=0
+        py_dow = d.weekday()
+        our_dow = (py_dow + 1) % 7  # Mon=1,Tue=2,...,Sat=6,Sun=0
+
+        for p in patterns:
+            if p.day_of_week != our_dow:
+                continue
+            if p.start_date and d < p.start_date:
+                continue
+            if p.end_date and d > p.end_date:
+                continue
+            # For biweekly, check week parity relative to start_date
+            if p.frequency == "biweekly" and p.start_date:
+                weeks_diff = (d - p.start_date).days // 7
+                if weeks_diff % 2 != 0:
+                    continue
+
+            existing = Unavailability.query.filter_by(member_id=member_id, date=d).first()
+            if not existing:
+                db.session.add(Unavailability(
+                    member_id=member_id, date=d, reason=p.reason or "Recurring"
+                ))
+                added += 1
+
+    db.session.commit()
+    _cache_clear_team(member.team_id)
+    return jsonify({"message": f"{added} unavailabilities created from patterns", "count": added})
 
 
 if __name__ == "__main__":

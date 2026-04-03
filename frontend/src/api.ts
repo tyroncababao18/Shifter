@@ -52,6 +52,41 @@ export interface Unavailability {
   member_id: number;
   date: string;
   reason: string;
+  leave_type: string | null;
+  leave_request_id: number | null;
+}
+
+export type LeaveType = "vacation" | "sick" | "personal";
+export type LeaveStatus = "pending" | "approved" | "rejected";
+
+export interface LeaveRequest {
+  id: number;
+  member_id: number;
+  team_id: number;
+  leave_type: LeaveType;
+  start_date: string;
+  end_date: string;
+  partial_day: "morning" | "afternoon" | null;
+  status: LeaveStatus;
+  notes: string;
+  requested_by_user_id: number | null;
+  requested_by_name: string | null;
+  reviewed_by_user_id: number | null;
+  reviewed_by_name: string | null;
+  review_notes: string;
+  reviewed_at: string | null;
+  member_name: string | null;
+  created_at: string | null;
+}
+
+export interface RecurringUnavailabilityEntry {
+  id: number;
+  member_id: number;
+  day_of_week: number;
+  frequency: "weekly" | "biweekly";
+  start_date: string | null;
+  end_date: string | null;
+  reason: string;
 }
 
 export interface ShiftSwapInfo {
@@ -249,6 +284,29 @@ export const getPastShiftsView = (teamId: number, year: number, month: number) =
 // Settings
 export const getSettings = (teamId?: number) => api.get<{ settings: SettingsMap; defaults: SettingsMap }>("/settings", { params: teamId ? { team_id: teamId } : {} });
 export const updateSettings = (settings: Partial<SettingsMap>, teamId?: number) => api.put<{ settings: SettingsMap }>("/settings", { settings, team_id: teamId ?? null });
+
+// Leave Requests
+export const getLeaveRequests = (teamId: number, params?: { status?: string; member_id?: number }) =>
+  api.get<{ leave_requests: LeaveRequest[] }>(`/teams/${teamId}/leave-requests`, { params });
+export const createLeaveRequest = (teamId: number, data: {
+  member_id: number; leave_type: LeaveType; start_date: string; end_date: string;
+  partial_day?: "morning" | "afternoon" | null; notes?: string;
+}) => api.post<LeaveRequest>(`/teams/${teamId}/leave-requests`, data);
+export const cancelLeaveRequest = (id: number) => api.delete(`/leave-requests/${id}`);
+export const approveLeaveRequest = (id: number, review_notes?: string) =>
+  api.post<LeaveRequest>(`/leave-requests/${id}/approve`, { review_notes });
+export const rejectLeaveRequest = (id: number, review_notes?: string) =>
+  api.post<LeaveRequest>(`/leave-requests/${id}/reject`, { review_notes });
+
+// Recurring Unavailabilities
+export const getRecurringUnavailabilities = (memberId: number) =>
+  api.get<{ recurring_unavailabilities: RecurringUnavailabilityEntry[] }>(`/members/${memberId}/recurring-unavailabilities`);
+export const createRecurringUnavailability = (memberId: number, data: {
+  day_of_week: number; frequency?: string; start_date?: string; end_date?: string; reason?: string;
+}) => api.post<RecurringUnavailabilityEntry>(`/members/${memberId}/recurring-unavailabilities`, data);
+export const deleteRecurringUnavailability = (id: number) => api.delete(`/recurring-unavailabilities/${id}`);
+export const applyRecurringUnavailabilities = (memberId: number, year: number, month: number) =>
+  api.post<{ message: string; count: number }>(`/members/${memberId}/recurring-unavailabilities/apply`, { year, month });
 
 // Reports
 export const getReports = (orgId?: number | null) =>

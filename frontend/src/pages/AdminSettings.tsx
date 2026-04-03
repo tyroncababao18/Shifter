@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import toast from "react-hot-toast";
-import { Save, RotateCcw, Settings, ShieldCheck } from "lucide-react";
+import { Save, RotateCcw, Settings, ShieldCheck, CalendarDays, Scale, Timer, Sun } from "lucide-react";
 import { getSettings, updateSettings, getTeams, settleDayShifts, type SettingsMap, type Team } from "../api";
 import { useAuth } from "../contexts/AuthContext";
 import ConfirmDialog from "../components/ConfirmDialog";
@@ -9,55 +9,153 @@ interface SettingField {
   key: keyof SettingsMap;
   label: string;
   description: string;
+  hint?: string;
   min: number;
   max: number;
 }
 
-const FIELDS: SettingField[] = [
+const SHIFT_LIMIT_FIELDS: SettingField[] = [
   {
     key: "max_normal_shifts",
-    label: "Max Normal Shifts (Sun-Wed)",
-    description: "Maximum number of Sunday through Wednesday shifts a member can have per month.",
+    label: "Weekday shifts (Sun–Wed)",
+    description: "Maximum per member per month.",
+    hint: "Most members hit this cap first.",
     min: 1,
     max: 30,
   },
   {
     key: "max_thursday_shifts",
-    label: "Max Thursday Shifts",
-    description: "Maximum number of Thursday shifts a member can have per month.",
+    label: "Thursday shifts",
+    description: "Maximum per member per month.",
     min: 1,
     max: 5,
   },
   {
     key: "max_weekend_shifts",
-    label: "Max Weekend Shifts (Fri-Sat)",
-    description: "Maximum number of weekend (Friday-Saturday pair) shifts a member can have per month.",
+    label: "Weekend shifts (Fri–Sat pair)",
+    description: "Maximum per member per month.",
     min: 1,
     max: 5,
   },
   {
-    key: "justice_lookback_months",
-    label: "Justice Lookback (months)",
-    description: "How many months back to consider when calculating fairness. 0 means all-time.",
-    min: 0,
-    max: 120,
-  },
-  {
-    key: "min_days_between_shifts",
-    label: "Min Days Between Shifts",
-    description: "Minimum number of days between consecutive shifts for the same member. 1 means no back-to-back shifts.",
-    min: 0,
-    max: 7,
-  },
-  {
     key: "min_shifts_per_month",
-    label: "Min Shifts Per Month",
-    description: "Minimum number of shifts each member should have per month. 0 means no minimum. Members with limited availability are prioritized.",
+    label: "Minimum shifts per month",
+    description: "Minimum shifts each member should receive. Members with limited availability are prioritized.",
+    hint: "Set to 0 to disable.",
     min: 0,
     max: 10,
   },
 ];
 
+const CONSTRAINT_FIELDS: SettingField[] = [
+  {
+    key: "min_days_between_shifts",
+    label: "Rest days between shifts",
+    description: "Minimum gap between consecutive shifts for the same member.",
+    hint: "1 = no back-to-back shifts.",
+    min: 0,
+    max: 7,
+  },
+];
+
+const FAIRNESS_FIELDS: SettingField[] = [
+  {
+    key: "justice_lookback_months",
+    label: "Lookback window",
+    description: "How many months of history to consider when balancing shifts.",
+    hint: "0 = all-time history.",
+    min: 0,
+    max: 120,
+  },
+];
+
+/* ────── Reusable section wrapper ────── */
+function Section({ icon, title, description, children }: {
+  icon: ReactNode;
+  title: string;
+  description: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="mb-8">
+      <div className="flex items-center gap-2.5 mb-1">
+        <span className="text-indigo-600">{icon}</span>
+        <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wide">{title}</h3>
+      </div>
+      <p className="text-xs text-gray-500 mb-3 ml-[26px]">{description}</p>
+      <div className="space-y-3">{children}</div>
+    </section>
+  );
+}
+
+/* ────── Numeric field row (compact) ────── */
+function NumberRow({ field, value, defaultValue, onChange }: {
+  field: SettingField;
+  value: string;
+  defaultValue?: string;
+  onChange: (v: string) => void;
+}) {
+  const changed = defaultValue !== undefined && value !== defaultValue;
+  return (
+    <div className="flex items-start gap-4 bg-white rounded-xl border border-gray-200 px-4 py-3">
+      <div className="flex-1 min-w-0">
+        <label className="text-sm font-medium text-gray-900">{field.label}</label>
+        <p className="text-xs text-gray-500 mt-0.5">{field.description}</p>
+        {field.hint && <p className="text-xs text-gray-400 italic">{field.hint}</p>}
+        {changed && <p className="text-xs text-indigo-600 mt-0.5">Default: {defaultValue}</p>}
+      </div>
+      <input
+        type="number"
+        min={field.min}
+        max={field.max}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-20 px-2 py-1.5 border border-gray-300 rounded-lg text-sm text-center focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none shrink-0"
+      />
+    </div>
+  );
+}
+
+/* ────── Toggle row ────── */
+function ToggleRow({ label, description, checked, onChange, color = "indigo", defaultValue, children }: {
+  label: string;
+  description: string;
+  checked: boolean;
+  onChange: () => void;
+  color?: "indigo" | "teal";
+  defaultValue?: string;
+  children?: ReactNode;
+}) {
+  const bg = color === "teal" ? "bg-teal-600" : "bg-indigo-600";
+  const changed = defaultValue !== undefined && String(checked) !== defaultValue;
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 px-4 py-3">
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex-1 min-w-0">
+          <label className="text-sm font-medium text-gray-900">{label}</label>
+          <p className="text-xs text-gray-500 mt-0.5">{description}</p>
+          {changed && <p className="text-xs text-indigo-600 mt-0.5">Default: {defaultValue}</p>}
+        </div>
+        <button
+          type="button"
+          onClick={onChange}
+          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors shrink-0 ${
+            checked ? bg : "bg-gray-300"
+          }`}
+        >
+          <span
+            className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+              checked ? "translate-x-6" : "translate-x-1"
+            }`}
+          />
+        </button>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/* ────── Main component ────── */
 export default function AdminSettings() {
   const { selectedOrgId } = useAuth();
   const [teams, setTeams] = useState<Team[]>([]);
@@ -124,12 +222,16 @@ export default function AdminSettings() {
     }
   };
 
+  const set = (key: keyof SettingsMap, value: string) =>
+    settings && setSettings({ ...settings, [key]: value });
+
   if (loading) {
     return <div className="max-w-2xl space-y-4">{[1, 2, 3, 4].map((i) => <div key={i} className="h-24 bg-gray-100 rounded-xl animate-pulse" />)}</div>;
   }
 
   return (
     <div className="max-w-2xl">
+      {/* ── Header ── */}
       <div className="flex items-center gap-3 mb-6">
         <div className="w-10 h-10 rounded-lg bg-indigo-100 text-indigo-600 flex items-center justify-center">
           <Settings size={20} />
@@ -140,9 +242,9 @@ export default function AdminSettings() {
         </div>
       </div>
 
-      {/* Scope selector */}
-      <div className="mb-6">
-        <label className="block text-sm font-medium text-gray-700 mb-1">Scope</label>
+      {/* ── Scope selector ── */}
+      <div className="mb-8 bg-white rounded-xl border border-gray-200 px-4 py-3">
+        <label className="block text-sm font-medium text-gray-700 mb-1">Configuration scope</label>
         <select
           value={selectedTeam}
           onChange={(e) => setSelectedTeam(e.target.value === "global" ? "global" : Number(e.target.value))}
@@ -151,194 +253,200 @@ export default function AdminSettings() {
           <option value="global">Global (all teams)</option>
           {teams.map((t) => <option key={t.id} value={t.id}>{t.name} (team override)</option>)}
         </select>
-        <p className="text-xs text-gray-500 mt-1">
-          Team-specific settings override global defaults.
+        <p className="text-xs text-gray-500 mt-1.5">
+          {selectedTeam === "global"
+            ? "These values apply to every team unless a team-specific override exists."
+            : "These overrides apply only to this team and take priority over global settings."}
         </p>
       </div>
 
-      {/* Settings fields */}
       {settings && (
-        <div className="space-y-4">
-          {FIELDS.map((f) => (
-            <div key={f.key} className="bg-white rounded-xl border border-gray-200 p-4">
-              <div className="flex items-center justify-between mb-1">
-                <label className="text-sm font-semibold text-gray-900">{f.label}</label>
-                <input
-                  type="number"
-                  min={f.min}
-                  max={f.max}
-                  value={settings[f.key]}
-                  onChange={(e) => setSettings({ ...settings, [f.key]: e.target.value })}
-                  className="w-20 px-2 py-1.5 border border-gray-300 rounded-lg text-sm text-center focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
-                />
+        <>
+          {/* ── 1. Shift limits ── */}
+          <Section
+            icon={<CalendarDays size={16} />}
+            title="Shift Limits"
+            description="Control how many shifts a single member can be assigned per month."
+          >
+            {SHIFT_LIMIT_FIELDS.map((f) => (
+              <NumberRow
+                key={f.key}
+                field={f}
+                value={settings[f.key]}
+                defaultValue={defaults?.[f.key]}
+                onChange={(v) => set(f.key, v)}
+              />
+            ))}
+          </Section>
+
+          {/* ── 2. Scheduling constraints ── */}
+          <Section
+            icon={<Timer size={16} />}
+            title="Scheduling Constraints"
+            description="Rules that govern when and how shifts are assigned."
+          >
+            {CONSTRAINT_FIELDS.map((f) => (
+              <NumberRow
+                key={f.key}
+                field={f}
+                value={settings[f.key]}
+                defaultValue={defaults?.[f.key]}
+                onChange={(v) => set(f.key, v)}
+              />
+            ))}
+
+            {/* Active Shift Days */}
+            <div className="bg-white rounded-xl border border-gray-200 px-4 py-3">
+              <label className="text-sm font-medium text-gray-900 mb-2 block">Active shift days</label>
+              <p className="text-xs text-gray-500 mb-2">Only these days will have shifts generated. Inactive days are skipped entirely.</p>
+              <div className="flex gap-2 mb-3">
+                {([
+                  { label: "Full Week", days: "0,1,2,3,4,5,6" },
+                  { label: "Work Week (Sun–Thu)", days: "6,0,1,2,3" },
+                ] as const).map((preset) => {
+                  const current = new Set((settings.active_days || "0,1,2,3,4,5,6").split(",").map(Number));
+                  const presetSet = new Set(preset.days.split(",").map(Number));
+                  const isActive = current.size === presetSet.size && [...current].every((d) => presetSet.has(d));
+                  return (
+                    <button
+                      key={preset.label}
+                      onClick={() => set("active_days", preset.days)}
+                      className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
+                        isActive
+                          ? "bg-indigo-600 text-white border-indigo-600"
+                          : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
+                      }`}
+                    >
+                      {preset.label}
+                    </button>
+                  );
+                })}
               </div>
-              <p className="text-xs text-gray-500">{f.description}</p>
-              {defaults && settings[f.key] !== defaults[f.key] && (
-                <p className="text-xs text-indigo-600 mt-1">Default: {defaults[f.key]}</p>
+              <div className="flex gap-1.5">
+                {(["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const).map((dayLabel, idx) => {
+                  const weekday = [6, 0, 1, 2, 3, 4, 5][idx];
+                  const current = new Set((settings.active_days || "0,1,2,3,4,5,6").split(",").map(Number));
+                  const isOn = current.has(weekday);
+                  return (
+                    <button
+                      key={dayLabel}
+                      onClick={() => {
+                        const next = new Set(current);
+                        if (isOn) next.delete(weekday);
+                        else next.add(weekday);
+                        set("active_days", [...next].join(","));
+                      }}
+                      className={`flex-1 py-2 text-xs font-medium rounded-lg border transition-colors ${
+                        isOn
+                          ? "bg-indigo-100 text-indigo-700 border-indigo-300"
+                          : "bg-gray-50 text-gray-400 border-gray-200"
+                      }`}
+                    >
+                      {dayLabel}
+                    </button>
+                  );
+                })}
+              </div>
+              {defaults && settings.active_days !== defaults.active_days && (
+                <p className="text-xs text-indigo-600 mt-2">Default: {defaults.active_days}</p>
               )}
             </div>
-          ))}
+          </Section>
 
-          {/* Fairness Mode */}
-          <div className="bg-white rounded-xl border border-gray-200 p-4">
-            <div className="flex items-center justify-between mb-1">
-              <label className="text-sm font-semibold text-gray-900">Fairness Mode</label>
-              <select
-                value={settings.fairness_mode}
-                onChange={(e) => setSettings({ ...settings, fairness_mode: e.target.value })}
-                className="w-32 px-2 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
-              >
-                <option value="count">Count</option>
-                <option value="ratio">Ratio</option>
-              </select>
-            </div>
-            <p className="text-xs text-gray-500">
-              <strong>Count</strong>: assigns based on total shift count (classic). <strong>Ratio</strong>: accounts for each member's availability — members available less often won't be overloaded.
-            </p>
-            {defaults && settings.fairness_mode !== defaults.fairness_mode && (
-              <p className="text-xs text-indigo-600 mt-1">Default: {defaults.fairness_mode}</p>
-            )}
-          </div>
-
-          {/* Rebalancing toggle */}
-          <div className="bg-white rounded-xl border border-gray-200 p-4">
-            <div className="flex items-center justify-between mb-1">
-              <label className="text-sm font-semibold text-gray-900">Enable Rebalancing Pass</label>
-              <button
-                type="button"
-                onClick={() => setSettings({ ...settings, enable_rebalancing: settings.enable_rebalancing === "true" ? "false" : "true" })}
-                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                  settings.enable_rebalancing === "true" ? "bg-indigo-600" : "bg-gray-300"
-                }`}
-              >
-                <span
-                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                    settings.enable_rebalancing === "true" ? "translate-x-6" : "translate-x-1"
-                  }`}
-                />
-              </button>
-            </div>
-            <p className="text-xs text-gray-500">
-              When enabled, a second pass after initial scheduling attempts to swap assignments between over- and under-loaded members to improve overall fairness.
-            </p>
-            {defaults && settings.enable_rebalancing !== defaults.enable_rebalancing && (
-              <p className="text-xs text-indigo-600 mt-1">Default: {defaults.enable_rebalancing}</p>
-            )}
-          </div>
-
-          {/* Active Shift Days */}
-          <div className="bg-white rounded-xl border border-gray-200 p-4">
-            <label className="text-sm font-semibold text-gray-900 mb-2 block">Active Shift Days</label>
-            <div className="flex gap-2 mb-3">
-              {([
-                { label: "Full Week", days: "0,1,2,3,4,5,6" },
-                { label: "Work Week (Sun-Thu)", days: "6,0,1,2,3" },
-              ] as const).map((preset) => {
-                const current = new Set((settings.active_days || "0,1,2,3,4,5,6").split(",").map(Number));
-                const presetSet = new Set(preset.days.split(",").map(Number));
-                const isActive = current.size === presetSet.size && [...current].every((d) => presetSet.has(d));
-                return (
-                  <button
-                    key={preset.label}
-                    onClick={() => setSettings({ ...settings, active_days: preset.days })}
-                    className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
-                      isActive
-                        ? "bg-indigo-600 text-white border-indigo-600"
-                        : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
-                    }`}
-                  >
-                    {preset.label}
-                  </button>
-                );
-              })}
-            </div>
-            <div className="flex gap-1.5">
-              {(["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const).map((dayLabel, idx) => {
-                const weekday = [6, 0, 1, 2, 3, 4, 5][idx];
-                const current = new Set((settings.active_days || "0,1,2,3,4,5,6").split(",").map(Number));
-                const isOn = current.has(weekday);
-                return (
-                  <button
-                    key={dayLabel}
-                    onClick={() => {
-                      const next = new Set(current);
-                      if (isOn) next.delete(weekday);
-                      else next.add(weekday);
-                      setSettings({ ...settings, active_days: [...next].join(",") });
-                    }}
-                    className={`flex-1 py-2 text-xs font-medium rounded-lg border transition-colors ${
-                      isOn
-                        ? "bg-indigo-100 text-indigo-700 border-indigo-300"
-                        : "bg-gray-50 text-gray-400 border-gray-200"
-                    }`}
-                  >
-                    {dayLabel}
-                  </button>
-                );
-              })}
-            </div>
-            <p className="text-xs text-gray-500 mt-2">
-              Schedule generation only creates shifts on active days. Inactive days are skipped entirely.
-            </p>
-            {defaults && settings.active_days !== defaults.active_days && (
-              <p className="text-xs text-indigo-600 mt-1">Default: {defaults.active_days}</p>
-            )}
-          </div>
-
-          {/* Day Shift toggle */}
-          <div className="bg-white rounded-xl border border-gray-200 p-4">
-            <div className="flex items-center justify-between mb-1">
-              <label className="text-sm font-semibold text-gray-900">Enable Day Shift Rotation</label>
-              <button
-                type="button"
-                onClick={() => setSettings({ ...settings, shotef_enabled: settings.shotef_enabled === "true" ? "false" : "true" })}
-                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                  settings.shotef_enabled === "true" ? "bg-teal-600" : "bg-gray-300"
-                }`}
-              >
-                <span
-                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                    settings.shotef_enabled === "true" ? "translate-x-6" : "translate-x-1"
-                  }`}
-                />
-              </button>
-            </div>
-            <p className="text-xs text-gray-500">
-              When enabled, schedule generation also assigns a day shift member for each work week (Sun-Thu). Leaders are excluded.
-            </p>
-            {defaults && settings.shotef_enabled !== defaults.shotef_enabled && (
-              <p className="text-xs text-indigo-600 mt-1">Default: {defaults.shotef_enabled}</p>
-            )}
-          </div>
-
-          {/* Settle Day Shifts */}
-          {selectedTeam !== "global" && (
-            <div className="bg-white rounded-xl border border-teal-200 p-4">
-              <div className="flex items-center justify-between mb-1">
-                <label className="text-sm font-semibold text-gray-900">Settle Day Shift Fairness</label>
-                <button
-                  onClick={() => setShowSettle(true)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-teal-600 text-white hover:bg-teal-700"
+          {/* ── 3. Fairness & balancing ── */}
+          <Section
+            icon={<Scale size={16} />}
+            title="Fairness & Balancing"
+            description="How the scheduler distributes shifts evenly across members."
+          >
+            {/* Fairness Mode */}
+            <div className="bg-white rounded-xl border border-gray-200 px-4 py-3">
+              <div className="flex items-start gap-4">
+                <div className="flex-1 min-w-0">
+                  <label className="text-sm font-medium text-gray-900">Fairness mode</label>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    <strong>Count</strong> balances by total shift count.
+                    <strong> Ratio</strong> accounts for each member's availability so less-available members aren't overloaded.
+                  </p>
+                  {defaults && settings.fairness_mode !== defaults.fairness_mode && (
+                    <p className="text-xs text-indigo-600 mt-0.5">Default: {defaults.fairness_mode}</p>
+                  )}
+                </div>
+                <select
+                  value={settings.fairness_mode}
+                  onChange={(e) => set("fairness_mode", e.target.value)}
+                  className="w-28 px-2 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none shrink-0"
                 >
-                  <ShieldCheck size={14} />
-                  Settle Now
-                </button>
+                  <option value="count">Count</option>
+                  <option value="ratio">Ratio</option>
+                </select>
               </div>
-              <p className="text-xs text-gray-500">
-                Settling resets the day shift fairness baseline to today. All day shift credits are zeroed out and future auto-generation only considers assignments after the settlement date. Use this when you want to start fresh.
-              </p>
-              {settings.shotef_settled_at && (
-                <p className="text-xs text-teal-600 mt-1 font-medium">
-                  Last settled: {settings.shotef_settled_at}
-                </p>
-              )}
             </div>
-          )}
-        </div>
+
+            {FAIRNESS_FIELDS.map((f) => (
+              <NumberRow
+                key={f.key}
+                field={f}
+                value={settings[f.key]}
+                defaultValue={defaults?.[f.key]}
+                onChange={(v) => set(f.key, v)}
+              />
+            ))}
+
+            <ToggleRow
+              label="Rebalancing pass"
+              description="After initial scheduling, attempt to swap assignments between over- and under-loaded members to improve fairness."
+              checked={settings.enable_rebalancing === "true"}
+              onChange={() => set("enable_rebalancing", settings.enable_rebalancing === "true" ? "false" : "true")}
+              defaultValue={defaults?.enable_rebalancing}
+            />
+          </Section>
+
+          {/* ── 4. Day shift rotation ── */}
+          <Section
+            icon={<Sun size={16} />}
+            title="Day Shift Rotation"
+            description="Assign a rotating day shift member each work week."
+          >
+            <ToggleRow
+              label="Enable day shift rotation"
+              description="When enabled, schedule generation also assigns a day shift member for each work week (Sun–Thu). Leaders are excluded."
+              checked={settings.shotef_enabled === "true"}
+              onChange={() => set("shotef_enabled", settings.shotef_enabled === "true" ? "false" : "true")}
+              color="teal"
+              defaultValue={defaults?.shotef_enabled}
+            />
+
+            {selectedTeam !== "global" && (
+              <div className="bg-white rounded-xl border border-teal-200 px-4 py-3">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex-1 min-w-0">
+                    <label className="text-sm font-medium text-gray-900">Settle day shift fairness</label>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      Resets the fairness baseline to today. All day shift credits are zeroed out and future scheduling only considers assignments after the settlement date.
+                    </p>
+                    {settings.shotef_settled_at && (
+                      <p className="text-xs text-teal-600 mt-1 font-medium">
+                        Last settled: {settings.shotef_settled_at}
+                      </p>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => setShowSettle(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-teal-600 text-white hover:bg-teal-700 shrink-0"
+                  >
+                    <ShieldCheck size={14} />
+                    Settle Now
+                  </button>
+                </div>
+              </div>
+            )}
+          </Section>
+        </>
       )}
 
-      {/* Actions */}
-      <div className="flex gap-3 mt-6">
+      {/* ── Actions ── */}
+      <div className="flex gap-3 mt-2 mb-8">
         <button
           onClick={handleSave}
           disabled={saving}

@@ -1,25 +1,42 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
+import dayjs from "dayjs";
 import {
   Plus, Trash2, Edit3, Calendar, Clock, ChevronLeft, Pencil, CalendarOff,
+  Palmtree, Thermometer, User, Check, X, ArrowRight,
 } from "lucide-react";
 import {
   getTeam, createMember, updateMember, deleteMember, deleteTeam, updateTeam,
-  getSwapBalance,
-  type Team, type Member, type SwapBalance,
+  getSwapBalance, getLeaveRequests, approveLeaveRequest, rejectLeaveRequest,
+  type Team, type Member, type SwapBalance, type LeaveRequest, type LeaveType,
 } from "../api";
+import { useAuth } from "../contexts/AuthContext";
 import Modal from "../components/Modal";
 import ConfirmDialog from "../components/ConfirmDialog";
+
+const LEAVE_ICONS: Record<LeaveType, typeof Palmtree> = { vacation: Palmtree, sick: Thermometer, personal: User };
+const LEAVE_COLORS: Record<LeaveType, { bg: string; text: string }> = {
+  vacation: { bg: "bg-blue-100", text: "text-blue-700" },
+  sick: { bg: "bg-red-100", text: "text-red-700" },
+  personal: { bg: "bg-orange-100", text: "text-orange-700" },
+};
+const STATUS_COLORS: Record<string, { bg: string; text: string }> = {
+  pending: { bg: "bg-amber-100", text: "text-amber-700" },
+  approved: { bg: "bg-green-100", text: "text-green-700" },
+  rejected: { bg: "bg-red-100", text: "text-red-700" },
+};
 
 export default function TeamDetail() {
   const { teamId } = useParams<{ teamId: string }>();
   const id = Number(teamId);
   const navigate = useNavigate();
+  const { user } = useAuth();
 
   const [team, setTeam] = useState<Team | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
   const [balances, setBalances] = useState<SwapBalance[]>([]);
+  const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [showDeleteTeam, setShowDeleteTeam] = useState(false);
 
@@ -42,15 +59,25 @@ export default function TeamDetail() {
 
   const [deleteTarget, setDeleteTarget] = useState<Member | null>(null);
 
+  const isAdmin = useMemo(() => {
+    if (!user) return false;
+    if (user.platform_role === "shifter_admin") return true;
+    const tm = user.teams.find((t) => t.id === id);
+    if (tm?.team_role === "team_admin") return true;
+    return user.organizations.some((o) => o.org_role === "organization_admin");
+  }, [user, id]);
+
   const load = async () => {
     try {
-      const [teamRes, balanceRes] = await Promise.all([
+      const [teamRes, balanceRes, leaveRes] = await Promise.all([
         getTeam(id),
         getSwapBalance(id),
+        getLeaveRequests(id),
       ]);
       setTeam(teamRes.data.team);
       setMembers(teamRes.data.members);
       setBalances(balanceRes.data.balances);
+      setLeaveRequests(leaveRes.data.leave_requests);
     } catch {
       toast.error("Failed to load team");
     } finally {
@@ -62,6 +89,24 @@ export default function TeamDetail() {
 
   const getBalance = (memberId: number) =>
     balances.find((b) => b.member_id === memberId);
+
+  const pendingLeave = leaveRequests.filter((r) => r.status === "pending");
+  const recentLeave = leaveRequests.filter((r) => r.status !== "pending").slice(0, 5);
+
+  const handleApproveLeave = async (lrId: number) => {
+    try {
+      await approveLeaveRequest(lrId);
+      toast.success("Leave approved");
+      load();
+    } catch { toast.error("Failed to approve"); }
+  };
+  const handleRejectLeave = async (lrId: number) => {
+    try {
+      await rejectLeaveRequest(lrId);
+      toast.success("Leave rejected");
+      load();
+    } catch { toast.error("Failed to reject"); }
+  };
 
   const handleAddMember = async () => {
     if (!memberName.trim()) { toast.error("Member name is required"); return; }
@@ -284,6 +329,128 @@ export default function TeamDetail() {
           })}
         </div>
       )}
+
+      {/* ══ Leave Management Section ══ */}
+      <div className="mt-8 mb-6">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <CalendarOff size={18} className="text-blue-600" />
+            <h3 className="text-lg font-semibold text-gray-900">Leave Requests</h3>
+            {pendingLeave.length > 0 && (
+              <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-amber-100 text-amber-700">
+                {pendingLeave.length} pending
+              </span>
+            )}
+          </div>
+          <Link
+            to={`/teams/${id}/leave`}
+            className="flex items-center gap-1.5 text-sm text-indigo-600 hover:text-indigo-700 font-medium"
+          >
+            Manage All <ArrowRight size={14} />
+          </Link>
+        </div>
+
+        {/* Pending Requests (actionable) */}
+        {pendingLeave.length > 0 && (
+          <div className="mb-4">
+            <h4 className="text-xs font-semibold uppercase tracking-wide text-amber-600 mb-2">Awaiting Review</h4>
+            <div className="space-y-2">
+              {pendingLeave.map((lr) => {
+                const Icon = LEAVE_ICONS[lr.leave_type];
+                const colors = LEAVE_COLORS[lr.leave_type];
+                const days = dayjs(lr.end_date).diff(dayjs(lr.start_date), "day") + 1;
+                return (
+                  <div key={lr.id} className="bg-white rounded-xl border border-amber-200 p-3 flex items-center gap-3">
+                    <div className={`w-9 h-9 rounded-lg ${colors.bg} ${colors.text} flex items-center justify-center shrink-0`}>
+                      <Icon size={16} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-sm font-medium text-gray-900">{lr.member_name}</span>
+                        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${colors.bg} ${colors.text}`}>
+                          {lr.leave_type}
+                        </span>
+                        {lr.partial_day && (
+                          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700">
+                            {lr.partial_day}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        {dayjs(lr.start_date).format("MMM D")}
+                        {lr.start_date !== lr.end_date && ` – ${dayjs(lr.end_date).format("MMM D")}`}
+                        {" "}({days} day{days > 1 ? "s" : ""})
+                        {lr.notes && <span className="italic"> — {lr.notes}</span>}
+                      </p>
+                    </div>
+                    {isAdmin && (
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          onClick={() => handleApproveLeave(lr.id)}
+                          className="p-2 rounded-lg bg-green-50 text-green-600 hover:bg-green-100 transition-colors"
+                          title="Approve"
+                        >
+                          <Check size={16} />
+                        </button>
+                        <button
+                          onClick={() => handleRejectLeave(lr.id)}
+                          className="p-2 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 transition-colors"
+                          title="Reject"
+                        >
+                          <X size={16} />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Recent leave history */}
+        {recentLeave.length > 0 && (
+          <div>
+            <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2">Recent</h4>
+            <div className="space-y-1.5">
+              {recentLeave.map((lr) => {
+                const Icon = LEAVE_ICONS[lr.leave_type];
+                const colors = LEAVE_COLORS[lr.leave_type];
+                const statusColors = STATUS_COLORS[lr.status];
+                return (
+                  <div key={lr.id} className="bg-white rounded-lg border border-gray-200 px-3 py-2 flex items-center gap-3">
+                    <Icon size={14} className={colors.text} />
+                    <span className="text-sm text-gray-900 font-medium">{lr.member_name}</span>
+                    <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${colors.bg} ${colors.text}`}>
+                      {lr.leave_type}
+                    </span>
+                    <span className="text-xs text-gray-500 flex-1">
+                      {dayjs(lr.start_date).format("MMM D")}
+                      {lr.start_date !== lr.end_date && ` – ${dayjs(lr.end_date).format("MMM D")}`}
+                    </span>
+                    <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${statusColors.bg} ${statusColors.text}`}>
+                      {lr.status}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {leaveRequests.length === 0 && (
+          <div className="text-center py-8 bg-white rounded-xl border border-gray-200">
+            <CalendarOff size={32} className="mx-auto text-gray-300 mb-2" />
+            <p className="text-sm text-gray-500">No leave requests yet.</p>
+            <Link
+              to={`/teams/${id}/leave`}
+              className="inline-flex items-center gap-1.5 mt-2 text-sm text-indigo-600 hover:text-indigo-700 font-medium"
+            >
+              Submit a request <ArrowRight size={14} />
+            </Link>
+          </div>
+        )}
+      </div>
 
       {/* Tip */}
       <p className="mt-4 text-xs text-gray-400 text-center">

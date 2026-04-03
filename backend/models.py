@@ -310,4 +310,5 @@ SETTINGS_DEFAULTS = {
     "fairness_mode": "count",
     "min_shifts_per_month": "0",
     "enable_rebalancing": "false",
+    "active_days": "0,1,2,3,4,5,6",
 }

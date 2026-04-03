@@ -67,6 +67,7 @@ export default function SchedulePage() {
   const [dayShiftSubNeeds, setDayShiftSubNeeds] = useState<DayShiftSubNeed[]>([]);
   const [showDayShiftSubs, setShowDayShiftSubs] = useState(false);
   const [assigningDayShift, setAssigningDayShift] = useState<string | null>(null);
+  const [activeDays, setActiveDays] = useState<Set<number>>(new Set([0, 1, 2, 3, 4, 5, 6]));
 
   const isPastMonth = month.isBefore(dayjs().startOf("month"));
 
@@ -77,6 +78,9 @@ export default function SchedulePage() {
       setMembers(data.members);
       setShifts(data.shifts);
       setDayShiftDays(data.day_shift_days);
+      if (data.active_days) {
+        setActiveDays(new Set(data.active_days.split(",").map(Number)));
+      }
     } catch {
       toast.error("Failed to load schedule");
     } finally {
@@ -436,12 +440,14 @@ export default function SchedulePage() {
             const dayShifts = dateStr ? shiftsByDate[dateStr] || [] : [];
             const isWeekend = day && (day.day() === 5 || day.day() === 6);
             const isToday = day && day.isSame(dayjs(), "day");
+            const pyWeekday = day ? (day.day() + 6) % 7 : -1;
+            const isInactive = day && !activeDays.has(pyWeekday);
 
             return (
               <div
                 key={i}
                 className={`min-h-[80px] p-1.5 border-b border-r border-gray-100 ${
-                  !day ? "bg-gray-50/50" : isWeekend ? "bg-amber-50/30" : ""
+                  !day ? "bg-gray-50/50" : isInactive ? "bg-gray-100/60 opacity-50" : isWeekend ? "bg-amber-50/30" : ""
                 }`}
               >
                 {day && (

@@ -94,6 +94,7 @@ export interface SettingsMap {
   fairness_mode: string;
   min_shifts_per_month: string;
   enable_rebalancing: string;
+  active_days: string;
 }
 
 export interface SwapBalance {
@@ -234,7 +235,7 @@ export const addDayShiftDays = (teamId: number, memberId: number, dates: string[
 
 // Combined view endpoints (performance)
 export const getScheduleView = (teamId: number, year: number, month: number) =>
-  api.get<{ team: Team; members: Member[]; shifts: ShiftEntry[]; day_shift_days: DayShiftEntry[] }>(
+  api.get<{ team: Team; members: Member[]; shifts: ShiftEntry[]; day_shift_days: DayShiftEntry[]; active_days?: string }>(
     `/teams/${teamId}/schedule-view`, { params: { year, month } }
   );
 export const getPastShiftsView = (teamId: number, year: number, month: number) =>

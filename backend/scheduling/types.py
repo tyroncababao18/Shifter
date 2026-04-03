@@ -32,3 +32,4 @@ class ScheduleConfig:
     fairness_mode: str
     min_shifts: int
     enable_rebalancing: bool
+    active_days: set[int] = field(default_factory=lambda: {0, 1, 2, 3, 4, 5, 6})

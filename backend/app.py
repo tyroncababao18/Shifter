@@ -989,11 +989,15 @@ def api_schedule_view(team_id):
         md["unavailabilities"] = [u.to_dict() for u in m.unavailabilities]
         members_data.append(md)
 
+    all_settings = get_all_settings(team_id)
+    active_days_str = all_settings.get("active_days", "0,1,2,3,4,5,6")
+
     result = {
         "team": team.to_dict(member_count=len(members)),
         "members": members_data,
         "shifts": [s.to_dict() for s in shifts],
         "day_shift_days": [d.to_dict() for d in day_shift_days],
+        "active_days": active_days_str,
     }
     _cache_set(cache_key, result)
     return jsonify(result)

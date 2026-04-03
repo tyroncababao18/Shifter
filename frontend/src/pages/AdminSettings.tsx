@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
 import { Save, RotateCcw, Settings, ShieldCheck } from "lucide-react";
 import { getSettings, updateSettings, getTeams, settleDayShifts, type SettingsMap, type Team } from "../api";
+import { useAuth } from "../contexts/AuthContext";
 import ConfirmDialog from "../components/ConfirmDialog";
 
 interface SettingField {
@@ -58,6 +59,7 @@ const FIELDS: SettingField[] = [
 ];
 
 export default function AdminSettings() {
+  const { selectedOrgId } = useAuth();
   const [teams, setTeams] = useState<Team[]>([]);
   const [selectedTeam, setSelectedTeam] = useState<number | "global">("global");
   const [settings, setSettings] = useState<SettingsMap | null>(null);
@@ -70,7 +72,7 @@ export default function AdminSettings() {
   const load = async () => {
     try {
       const [teamsRes, settingsRes] = await Promise.all([
-        getTeams(),
+        getTeams(selectedOrgId),
         getSettings(selectedTeam === "global" ? undefined : selectedTeam),
       ]);
       setTeams(teamsRes.data.teams);
@@ -83,7 +85,7 @@ export default function AdminSettings() {
     }
   };
 
-  useEffect(() => { setLoading(true); load(); }, [selectedTeam]);
+  useEffect(() => { setLoading(true); load(); }, [selectedTeam, selectedOrgId]);
 
   const handleSave = async () => {
     if (!settings) return;

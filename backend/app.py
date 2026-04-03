@@ -17,9 +17,11 @@ from sqlalchemy.orm import joinedload, subqueryload
 from openpyxl import Workbook
 
 from models import (
-    db, Team, Member, Unavailability, Shift, ShiftSwap, Settings,
+    db, User, Organization, OrganizationMembership, TeamMembership,
+    Team, Member, Unavailability, Shift, ShiftSwap, Settings,
     ShotefDay, SETTINGS_DEFAULTS,
 )
+from auth import login_required, is_shifter_admin, is_team_admin, is_team_member, get_accessible_team_ids
 
 import time as _time
 
@@ -72,6 +74,12 @@ app.secret_key = os.environ.get("SECRET_KEY", "superSecretKey")
 
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
+# Register blueprints
+from routes_auth import auth_bp
+from routes_admin import admin_bp
+app.register_blueprint(auth_bp)
+app.register_blueprint(admin_bp)
+
 @app.before_request
 def _clear_per_request_caches():
     _settings_cache.clear()
@@ -81,15 +89,39 @@ def _clear_per_request_caches():
 db.init_app(app)
 with app.app_context():
     db.create_all()
-    # Auto-migrate: add shift_weight column if missing
+
+    # Auto-migrate: add columns if missing
     from sqlalchemy import inspect as sa_inspect
     _inspector = sa_inspect(db.engine)
+
     _member_cols = [c["name"] for c in _inspector.get_columns("members")]
     if "shift_weight" not in _member_cols:
         db.session.execute(db.text(
             "ALTER TABLE members ADD COLUMN shift_weight REAL DEFAULT 1.0 NOT NULL"
         ))
         db.session.commit()
+
+    # Add organization_id to teams if missing
+    _team_cols = [c["name"] for c in _inspector.get_columns("teams")]
+    if "organization_id" not in _team_cols:
+        db.session.execute(db.text(
+            "ALTER TABLE teams ADD COLUMN organization_id INTEGER REFERENCES organizations(id)"
+        ))
+        db.session.commit()
+
+    # Remove unique constraint on team name if it exists (now unique per org, not global)
+    # SQLite doesn't support DROP CONSTRAINT, so we skip this for SQLite
+    if not db_url.startswith("sqlite"):
+        try:
+            db.session.execute(db.text("ALTER TABLE teams DROP CONSTRAINT IF EXISTS teams_name_key"))
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+
+    # Auto-seed: create default admin if no users exist
+    if User.query.count() == 0:
+        from seed_auth import seed_auth_data
+        seed_auth_data()
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
@@ -152,17 +184,37 @@ def spa_fallback(e):
 # ══════════════════════════════════════
 
 @app.route("/api/teams", methods=["GET"])
+@login_required
 def api_get_teams():
-    cached = _cache_get("teams-list")
+    from flask import g
+    user = g.current_user
+    accessible = get_accessible_team_ids(user)
+    org_filter = request.args.get("organization_id", type=int)
+
+    cache_key = f"teams-list-{user.id}-org{org_filter or 'all'}"
+    cached = _cache_get(cache_key)
     if cached is not None:
         return jsonify(cached)
-    teams = Team.query.order_by(Team.name).all()
+
+    query = Team.query.order_by(Team.name)
+    if accessible is not None:
+        query = query.filter(Team.id.in_(accessible))
+    if org_filter is not None:
+        query = query.filter(Team.organization_id == org_filter)
+    teams = query.all()
+
+    team_ids = [t.id for t in teams]
     member_counts = dict(
         db.session.query(Member.team_id, func.count(Member.id))
+        .filter(Member.team_id.in_(team_ids))
         .group_by(Member.team_id).all()
-    )
+    ) if team_ids else {}
     total_members = sum(member_counts.values()) if member_counts else 0
-    total_shifts = db.session.query(func.count(Shift.id)).scalar() or 0
+    total_shifts = db.session.query(func.count(Shift.id)).filter(
+        Shift.member_id.in_(
+            db.session.query(Member.id).filter(Member.team_id.in_(team_ids))
+        )
+    ).scalar() or 0 if team_ids else 0
     result = {
         "teams": [t.to_dict(member_count=member_counts.get(t.id, 0)) for t in teams],
         "stats": {
@@ -171,11 +223,12 @@ def api_get_teams():
             "total_shifts": total_shifts,
         },
     }
-    _cache_set("teams-list", result)
+    _cache_set(cache_key, result)
     return jsonify(result)
 
 
 @app.route("/api/teams", methods=["POST"])
+@login_required
 def api_create_team():
     data = request.get_json() or {}
     name = (data.get("name") or "").strip()
@@ -184,13 +237,15 @@ def api_create_team():
     if Team.query.filter_by(name=name).first():
         return json_error("Team name already exists")
 
-    team = Team(name=name, description=data.get("description", ""))
+    org_id = data.get("organization_id")
+    team = Team(name=name, description=data.get("description", ""), organization_id=org_id)
     db.session.add(team)
     db.session.commit()
     return jsonify(team.to_dict()), 201
 
 
 @app.route("/api/teams/<int:team_id>", methods=["GET"])
+@login_required
 def api_get_team(team_id):
     team = Team.query.get_or_404(team_id)
     members = (
@@ -212,6 +267,7 @@ def api_get_team(team_id):
 
 
 @app.route("/api/teams/<int:team_id>", methods=["PUT"])
+@login_required
 def api_update_team(team_id):
     team = Team.query.get_or_404(team_id)
     data = request.get_json() or {}
@@ -227,6 +283,7 @@ def api_update_team(team_id):
 
 
 @app.route("/api/teams/<int:team_id>", methods=["DELETE"])
+@login_required
 def api_delete_team(team_id):
     team = Team.query.get_or_404(team_id)
     db.session.delete(team)
@@ -235,6 +292,7 @@ def api_delete_team(team_id):
 
 
 @app.route("/api/teams/<int:team_id>/upload-picture", methods=["POST"])
+@login_required
 def api_upload_team_picture(team_id):
     team = Team.query.get_or_404(team_id)
     pic = request.files.get("picture")
@@ -253,6 +311,7 @@ def api_upload_team_picture(team_id):
 # ══════════════════════════════════════
 
 @app.route("/api/teams/<int:team_id>/members", methods=["GET"])
+@login_required
 def api_get_members(team_id):
     Team.query.get_or_404(team_id)
     members = (
@@ -274,6 +333,7 @@ def api_get_members(team_id):
 
 
 @app.route("/api/teams/<int:team_id>/members", methods=["POST"])
+@login_required
 def api_create_member(team_id):
     Team.query.get_or_404(team_id)
     data = request.get_json() or {}
@@ -309,6 +369,7 @@ def api_create_member(team_id):
 
 
 @app.route("/api/members/<int:member_id>", methods=["PUT"])
+@login_required
 def api_update_member(member_id):
     member = Member.query.get_or_404(member_id)
     data = request.get_json() or {}
@@ -332,6 +393,7 @@ def api_update_member(member_id):
 
 
 @app.route("/api/members/<int:member_id>", methods=["DELETE"])
+@login_required
 def api_delete_member(member_id):
     member = Member.query.get_or_404(member_id)
     db.session.delete(member)
@@ -340,6 +402,7 @@ def api_delete_member(member_id):
 
 
 @app.route("/api/members/<int:member_id>/upload-photo", methods=["POST"])
+@login_required
 def api_upload_member_photo(member_id):
     member = Member.query.get_or_404(member_id)
     photo = request.files.get("photo")
@@ -358,6 +421,7 @@ def api_upload_member_photo(member_id):
 # ══════════════════════════════════════
 
 @app.route("/api/members/<int:member_id>/unavailabilities", methods=["GET"])
+@login_required
 def api_get_unavailabilities(member_id):
     Member.query.get_or_404(member_id)
     unavs = Unavailability.query.filter_by(member_id=member_id).order_by(Unavailability.date).all()
@@ -365,6 +429,7 @@ def api_get_unavailabilities(member_id):
 
 
 @app.route("/api/members/<int:member_id>/unavailabilities", methods=["POST"])
+@login_required
 def api_create_unavailability(member_id):
     Member.query.get_or_404(member_id)
     data = request.get_json() or {}
@@ -389,6 +454,7 @@ def api_create_unavailability(member_id):
 
 
 @app.route("/api/members/<int:member_id>/unavailabilities/bulk", methods=["POST"])
+@login_required
 def api_bulk_create_unavailability(member_id):
     """Create unavailabilities for multiple dates at once."""
     Member.query.get_or_404(member_id)
@@ -416,6 +482,7 @@ def api_bulk_create_unavailability(member_id):
 
 
 @app.route("/api/unavailabilities/<int:unav_id>", methods=["PUT"])
+@login_required
 def api_update_unavailability(unav_id):
     unav = Unavailability.query.get_or_404(unav_id)
     data = request.get_json() or {}
@@ -437,6 +504,7 @@ def api_update_unavailability(unav_id):
 
 
 @app.route("/api/unavailabilities/<int:unav_id>", methods=["DELETE"])
+@login_required
 def api_delete_unavailability(unav_id):
     unav = Unavailability.query.get_or_404(unav_id)
     db.session.delete(unav)
@@ -449,6 +517,7 @@ def api_delete_unavailability(unav_id):
 # ══════════════════════════════════════
 
 @app.route("/api/teams/<int:team_id>/schedule/swap", methods=["POST"])
+@login_required
 def api_swap_shift(team_id):
     Team.query.get_or_404(team_id)
     data = request.get_json() or {}
@@ -486,6 +555,7 @@ def api_swap_shift(team_id):
 
 
 @app.route("/api/swaps/<int:swap_id>", methods=["DELETE"])
+@login_required
 def api_revert_swap(swap_id):
     swap = ShiftSwap.query.get_or_404(swap_id)
     shift = Shift.query.get(swap.shift_id)
@@ -497,6 +567,7 @@ def api_revert_swap(swap_id):
 
 
 @app.route("/api/teams/<int:team_id>/swap-balance", methods=["GET"])
+@login_required
 def api_swap_balance(team_id):
     Team.query.get_or_404(team_id)
     members = Member.query.filter_by(team_id=team_id).all()
@@ -528,6 +599,7 @@ def api_swap_balance(team_id):
 # ══════════════════════════════════════
 
 @app.route("/api/teams/<int:team_id>/schedule/assign", methods=["POST"])
+@login_required
 def api_assign_shift(team_id):
     """Manually assign a member to a specific date (used to fill 'no one available' slots)."""
     Team.query.get_or_404(team_id)
@@ -578,6 +650,7 @@ def api_assign_shift(team_id):
 
 
 @app.route("/api/teams/<int:team_id>/schedule/generate", methods=["POST"])
+@login_required
 def api_generate_schedule(team_id):
     try:
         Team.query.get_or_404(team_id)
@@ -773,6 +846,7 @@ def generate_day_shifts(team_id, year, month):
 # ══════════════════════════════════════
 
 @app.route("/api/teams/<int:team_id>/schedule", methods=["GET"])
+@login_required
 def api_get_schedule(team_id):
     Team.query.get_or_404(team_id)
     year = request.args.get("year", type=int)
@@ -796,6 +870,7 @@ def api_get_schedule(team_id):
 
 
 @app.route("/api/teams/<int:team_id>/schedule", methods=["DELETE"])
+@login_required
 def api_delete_schedule(team_id):
     Team.query.get_or_404(team_id)
     year = request.args.get("year", type=int)
@@ -816,6 +891,7 @@ def api_delete_schedule(team_id):
 
 
 @app.route("/api/teams/<int:team_id>/schedule/export", methods=["GET"])
+@login_required
 def api_export_schedule(team_id):
     Team.query.get_or_404(team_id)
     year = request.args.get("year", type=int)
@@ -859,6 +935,7 @@ def api_export_schedule(team_id):
 # ══════════════════════════════════════
 
 @app.route("/api/teams/<int:team_id>/schedule-view", methods=["GET"])
+@login_required
 def api_schedule_view(team_id):
     """Combined endpoint: team + members + shifts + day shifts for one month."""
     year = request.args.get("year", type=int)
@@ -923,6 +1000,7 @@ def api_schedule_view(team_id):
 
 
 @app.route("/api/teams/<int:team_id>/past-shifts-view", methods=["GET"])
+@login_required
 def api_past_shifts_view(team_id):
     """Combined endpoint: team + members + past shifts + day shifts for one month."""
     year = request.args.get("year", type=int)
@@ -984,6 +1062,7 @@ def api_past_shifts_view(team_id):
 # ══════════════════════════════════════
 
 @app.route("/api/teams/<int:team_id>/past-shifts", methods=["GET"])
+@login_required
 def api_get_past_shifts(team_id):
     Team.query.get_or_404(team_id)
     year = request.args.get("year", type=int)
@@ -1021,6 +1100,7 @@ def api_get_past_shifts(team_id):
 
 
 @app.route("/api/teams/<int:team_id>/past-shifts", methods=["POST"])
+@login_required
 def api_bulk_add_past_shifts(team_id):
     Team.query.get_or_404(team_id)
     data = request.get_json() or {}
@@ -1048,6 +1128,7 @@ def api_bulk_add_past_shifts(team_id):
 
 
 @app.route("/api/shifts/<int:shift_id>", methods=["PUT"])
+@login_required
 def api_reassign_shift(shift_id):
     """Directly reassign a shift to a different member (not a swap)."""
     shift = Shift.query.get_or_404(shift_id)
@@ -1062,6 +1143,7 @@ def api_reassign_shift(shift_id):
 
 
 @app.route("/api/shifts/<int:shift_id>", methods=["DELETE"])
+@login_required
 def api_delete_shift(shift_id):
     shift = Shift.query.get_or_404(shift_id)
     db.session.delete(shift)
@@ -1074,6 +1156,7 @@ def api_delete_shift(shift_id):
 # ══════════════════════════════════════
 
 @app.route("/api/teams/<int:team_id>/schedules", methods=["GET"])
+@login_required
 def api_get_saved_schedules(team_id):
     Team.query.get_or_404(team_id)
     shifts = (
@@ -1101,6 +1184,7 @@ def api_get_saved_schedules(team_id):
 # ══════════════════════════════════════
 
 @app.route("/api/settings", methods=["GET"])
+@login_required
 def api_get_settings():
     team_id = request.args.get("team_id", type=int)
     result = {}
@@ -1110,6 +1194,7 @@ def api_get_settings():
 
 
 @app.route("/api/settings", methods=["PUT"])
+@login_required
 def api_update_settings():
     data = request.get_json() or {}
     team_id = data.get("team_id")
@@ -1137,6 +1222,7 @@ def api_update_settings():
 # ══════════════════════════════════════
 
 @app.route("/api/teams/<int:team_id>/day-shifts", methods=["GET"])
+@login_required
 def api_get_day_shifts(team_id):
     Team.query.get_or_404(team_id)
     year = request.args.get("year", type=int)
@@ -1155,6 +1241,7 @@ def api_get_day_shifts(team_id):
 
 
 @app.route("/api/teams/<int:team_id>/day-shifts/reassign", methods=["POST"])
+@login_required
 def api_day_shift_reassign(team_id):
     """Reassign a single day shift to a different member."""
     Team.query.get_or_404(team_id)
@@ -1176,6 +1263,7 @@ def api_day_shift_reassign(team_id):
 
 
 @app.route("/api/day-shift-days/<int:sd_id>", methods=["DELETE"])
+@login_required
 def api_delete_day_shift(sd_id):
     sd = ShotefDay.query.get_or_404(sd_id)
     db.session.delete(sd)
@@ -1184,6 +1272,7 @@ def api_delete_day_shift(sd_id):
 
 
 @app.route("/api/teams/<int:team_id>/day-shift-history", methods=["GET"])
+@login_required
 def api_day_shift_history(team_id):
     Team.query.get_or_404(team_id)
     members = Member.query.filter_by(team_id=team_id).all()
@@ -1220,6 +1309,7 @@ def api_day_shift_history(team_id):
 
 
 @app.route("/api/teams/<int:team_id>/day-shift-settle", methods=["POST"])
+@login_required
 def api_day_shift_settle(team_id):
     """Settle day shift fairness: future calculations only consider data after today."""
     Team.query.get_or_404(team_id)
@@ -1243,6 +1333,7 @@ def api_day_shift_settle(team_id):
 # ══════════════════════════════════════
 
 @app.route("/api/teams/<int:team_id>/day-shift-days", methods=["POST"])
+@login_required
 def api_add_day_shift_days(team_id):
     """Add day shift assignments for specific dates."""
     Team.query.get_or_404(team_id)
@@ -1280,12 +1371,26 @@ def api_add_day_shift_days(team_id):
 # ══════════════════════════════════════
 
 @app.route("/api/reports", methods=["GET"])
+@login_required
 def api_get_reports():
-    cached = _cache_get("reports")
+    from flask import g
+    org_filter = request.args.get("organization_id", type=int)
+    user = g.current_user
+    accessible = get_accessible_team_ids(user)
+
+    cache_key = f"reports-{user.id}-org{org_filter or 'all'}"
+    cached = _cache_get(cache_key)
     if cached is not None:
         return jsonify(cached)
-    teams = Team.query.all()
-    all_members = Member.query.all()
+
+    query = Team.query
+    if accessible is not None:
+        query = query.filter(Team.id.in_(accessible))
+    if org_filter is not None:
+        query = query.filter(Team.organization_id == org_filter)
+    teams = query.all()
+    team_ids = [t.id for t in teams]
+    all_members = Member.query.filter(Member.team_id.in_(team_ids)).all() if team_ids else []
 
     all_member_ids = [m.id for m in all_members]
 
@@ -1356,7 +1461,7 @@ def api_get_reports():
             "total_shifts": total_shifts_count,
         },
     }
-    _cache_set("reports", result)
+    _cache_set(cache_key, result)
     return jsonify(result)
 
 

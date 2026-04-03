@@ -2,16 +2,19 @@ import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
 import { Users, CalendarClock, CalendarDays, BarChart3 } from "lucide-react";
 import { getReports, type ReportTeam } from "../api";
+import { useAuth } from "../contexts/AuthContext";
 
 export default function ReportsPage() {
+  const { selectedOrgId } = useAuth();
   const [teams, setTeams] = useState<ReportTeam[]>([]);
   const [stats, setStats] = useState({ total_teams: 0, total_members: 0, total_shifts: 0 });
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    setLoading(true);
     (async () => {
       try {
-        const { data } = await getReports();
+        const { data } = await getReports(selectedOrgId);
         setTeams(data.teams);
         setStats(data.stats);
       } catch {
@@ -20,7 +23,7 @@ export default function ReportsPage() {
         setLoading(false);
       }
     })();
-  }, []);
+  }, [selectedOrgId]);
 
   if (loading) {
     return <div className="space-y-4">{[1, 2, 3].map((i) => <div key={i} className="h-32 bg-gray-100 rounded-xl animate-pulse" />)}</div>;

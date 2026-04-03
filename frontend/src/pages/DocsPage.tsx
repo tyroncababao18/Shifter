@@ -13,6 +13,7 @@ const sections: Section[] = [
     title: "Overview",
     content: `
       <p><strong>Shifter</strong> is a fair, automated shift scheduling system for teams of any size. It handles night-shift rotation, weekend pairing, day shift assignment, swap tracking, and fairness balancing — all through an intuitive web interface.</p>
+      <p>Shifter supports <strong>multi-tenant organizations</strong> with role-based access control, so multiple teams and organizations can be managed from a single platform.</p>
       <p>Use this documentation to learn how to use every feature of Shifter.</p>
     `,
   },
@@ -21,6 +22,8 @@ const sections: Section[] = [
     title: "Getting Started",
     content: `
       <ol>
+        <li><strong>Log in</strong> with your email and password. On first login you'll be asked to change your password.</li>
+        <li><strong>Select an organization</strong> (if you belong to more than one) using the dropdown in the header.</li>
         <li><strong>Create a team</strong> from the Dashboard.</li>
         <li><strong>Add members</strong> — the people who will be assigned to shifts.</li>
         <li><strong>Mark unavailability</strong> — for each month, mark dates individual members can't work.</li>
@@ -30,10 +33,41 @@ const sections: Section[] = [
     `,
   },
   {
+    id: "auth",
+    title: "Authentication & Roles",
+    content: `
+      <p>Shifter uses JWT-based authentication with a four-tier role hierarchy.</p>
+      <h4>Roles</h4>
+      <ul>
+        <li><strong>Platform Admin (Shifter Admin):</strong> Full access to all organizations, teams, users, and settings. Can create/delete organizations and manage all users.</li>
+        <li><strong>Organization Admin:</strong> Manages teams and members within their organization. Can add users to the org and assign roles.</li>
+        <li><strong>Team Admin:</strong> Manages members and schedules for their specific team(s).</li>
+        <li><strong>Employee:</strong> Can view their team's schedule and data. Read-only access.</li>
+      </ul>
+      <h4>Organization Selector</h4>
+      <p>Platform Admins and users belonging to multiple organizations can switch between organizations using the dropdown in the top header bar. This filters the Dashboard, Settings, and Reports to show only the selected organization's data.</p>
+      <h4>Password Management</h4>
+      <p>New users are created with a temporary password and must change it on first login. Admins can reset passwords for users within their scope.</p>
+    `,
+  },
+  {
+    id: "organizations",
+    title: "Organizations",
+    content: `
+      <p>Organizations are the top-level grouping in Shifter. Each team belongs to an organization.</p>
+      <ul>
+        <li><strong>Create:</strong> Platform Admins can create new organizations from the Admin → Organizations page.</li>
+        <li><strong>Members:</strong> Users are assigned to organizations with a role (admin or member).</li>
+        <li><strong>Teams:</strong> Each team belongs to one organization. When creating a team, it's automatically assigned to the selected organization.</li>
+        <li><strong>Delete:</strong> Deleting an organization removes all its teams, members, and data.</li>
+      </ul>
+    `,
+  },
+  {
     id: "teams",
     title: "Teams",
     content: `
-      <p>A <strong>Team</strong> is a group of members who share a shift rotation. Each team has its own members, schedules, and settings.</p>
+      <p>A <strong>Team</strong> is a group of members who share a shift rotation. Each team belongs to an organization and has its own members, schedules, and settings.</p>
       <ul>
         <li><strong>Create:</strong> Click "Add Team" on the Dashboard.</li>
         <li><strong>Edit:</strong> Click the pencil icon on the team header to rename or change the description.</li>
@@ -53,6 +87,7 @@ const sections: Section[] = [
         <li><strong>Leader:</strong> Leaders are excluded from auto-generated schedules but can cover shifts via swaps or manual assignment.</li>
         <li><strong>Shift Credit:</strong> Adjusts fairness for night shifts. Positive values count as extra shifts, negative as fewer. Useful when adding someone mid-rotation.</li>
         <li><strong>Day Shift Credit:</strong> Same as shift credit but for day shift rotation.</li>
+        <li><strong>Shift Weight:</strong> Controls how many shifts a member receives relative to others. 1.0 = full load (default), 0.5 = half load, 2.0 = double load. Useful for part-time members or members transitioning in/out.</li>
       </ul>
       <h4>Adding a New Member</h4>
       <p>When you add a new member, their shift credit is automatically set to the current team minimum so they start on equal footing.</p>
@@ -146,14 +181,24 @@ const sections: Section[] = [
     title: "Settings",
     content: `
       <p>Settings can be configured globally or per-team. Team-level settings override global defaults.</p>
-      <h4>Available Settings</h4>
+      <h4>Shift Caps</h4>
       <ul>
         <li><strong>Max Normal Shifts:</strong> Max Sunday-Wednesday shifts per member per month.</li>
         <li><strong>Max Thursday Shifts:</strong> Max Thursday shifts per member per month.</li>
         <li><strong>Max Weekend Shifts:</strong> Max weekend (Fri-Sat pair) shifts per member per month.</li>
-        <li><strong>Justice Lookback:</strong> How many months of history to consider for fairness. 0 = all time.</li>
         <li><strong>Min Days Between Shifts:</strong> Minimum rest gap between consecutive shifts for the same member.</li>
+        <li><strong>Min Shifts Per Month:</strong> Minimum number of shifts each member should receive. Members with limited availability are prioritized first.</li>
+      </ul>
+      <h4>Fairness & Algorithm</h4>
+      <ul>
+        <li><strong>Justice Lookback:</strong> How many months of history to consider for fairness. 0 = all time.</li>
+        <li><strong>Fairness Mode:</strong> <em>Count</em> assigns based on total shift count (classic). <em>Ratio</em> accounts for each member's availability and weight — members available less often won't be overloaded.</li>
+        <li><strong>Enable Rebalancing:</strong> When enabled, a second pass after initial scheduling swaps assignments between over- and under-loaded members to improve overall fairness spread.</li>
+      </ul>
+      <h4>Day Shifts</h4>
+      <ul>
         <li><strong>Day Shift Enabled:</strong> Toggle the day shift rotation on/off.</li>
+        <li><strong>Day Shift Settlement:</strong> (Team-level only) Reset the day shift fairness baseline. All credits are zeroed out and future generation only considers assignments after the settlement date.</li>
       </ul>
     `,
   },
@@ -175,15 +220,24 @@ const sections: Section[] = [
     id: "fairness",
     title: "Fairness Algorithm",
     content: `
-      <p>Shifter uses a multi-factor fairness algorithm to distribute shifts equitably.</p>
+      <p>Shifter uses a multi-factor fairness algorithm to distribute shifts equitably. The algorithm can be configured via Settings.</p>
       <h4>Effective Shift Count</h4>
       <p>For each member, the effective count is:</p>
       <p><code>effective = historical_shifts - covers_done + covers_received + shift_credit</code></p>
       <p>Members with the lowest effective count get priority.</p>
+      <h4>Fairness Modes</h4>
+      <ul>
+        <li><strong>Count Mode (default):</strong> Classic mode — sorts by total effective shift count and shift-type count, with random tie-breaking.</li>
+        <li><strong>Ratio Mode:</strong> Availability-weighted — computes a burden score: <code>(weighted_shifts / weight) / available_days</code>. Members available fewer days or with lower weight naturally receive fewer shifts without being overloaded. This solves the "availability concentration trap" where frequently-available members absorb a disproportionate share.</li>
+      </ul>
+      <h4>Shift Weight</h4>
+      <p>Each member has a configurable weight (0.1 to 2.0, default 1.0). In ratio mode, <code>weight=0.5</code> means each shift counts double toward that member's burden, so they'll receive roughly half the shifts of a weight=1.0 member.</p>
+      <h4>Minimum Participation</h4>
+      <p>When <em>Min Shifts Per Month</em> is set above 0, a pre-pass runs before the main algorithm. It processes the most constrained members first (fewest available days) and pre-assigns them to available dates to meet the minimum floor.</p>
+      <h4>Rebalancing Pass</h4>
+      <p>When enabled, a second pass runs after initial scheduling. It iteratively finds the most-burdened and least-burdened members and attempts to swap their assignments to reduce the fairness spread. The pass runs up to 50 iterations or until the spread drops below 0.1.</p>
       <h4>Per-Type Balancing</h4>
       <p>The algorithm tracks normal, Thursday, and weekend shifts separately, so no one gets stuck with all the undesirable slots.</p>
-      <h4>Tie-Breaking</h4>
-      <p>When multiple members have the same effective count, the algorithm uses randomized tie-breaking to prevent patterns.</p>
       <h4>Lookback Window</h4>
       <p>Configure <em>Justice Lookback Months</em> to limit how far back the algorithm looks. This is useful to gradually "forget" old imbalances.</p>
     `,

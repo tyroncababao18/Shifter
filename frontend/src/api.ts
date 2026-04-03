@@ -2,6 +2,27 @@ import axios from "axios";
 
 const api = axios.create({ baseURL: "/api" });
 
+// Attach JWT token to every request
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem("shifter_token");
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+// On 401, clear auth and redirect to login
+api.interceptors.response.use(
+  (res) => res,
+  (err) => {
+    if (err.response?.status === 401 && !err.config?.url?.includes("/auth/")) {
+      localStorage.removeItem("shifter_token");
+      window.location.href = "/login";
+    }
+    return Promise.reject(err);
+  }
+);
+
 export interface Team {
   id: number;
   name: string;
@@ -149,7 +170,10 @@ export interface ReportTeam {
 }
 
 // Teams
-export const getTeams = () => api.get<{ teams: Team[]; stats: { total_teams: number; total_members: number; total_shifts: number } }>("/teams");
+export const getTeams = (orgId?: number | null) =>
+  api.get<{ teams: Team[]; stats: { total_teams: number; total_members: number; total_shifts: number } }>(
+    "/teams", { params: orgId ? { organization_id: orgId } : {} }
+  );
 export const getTeam = (id: number) => api.get<{ team: Team; members: Member[] }>(`/teams/${id}`);
 export const createTeam = (data: { name: string; description?: string }) => api.post<Team>("/teams", data);
 export const updateTeam = (id: number, data: Partial<Team>) => api.put<Team>(`/teams/${id}`, data);
@@ -226,4 +250,98 @@ export const getSettings = (teamId?: number) => api.get<{ settings: SettingsMap;
 export const updateSettings = (settings: Partial<SettingsMap>, teamId?: number) => api.put<{ settings: SettingsMap }>("/settings", { settings, team_id: teamId ?? null });
 
 // Reports
-export const getReports = () => api.get<{ teams: ReportTeam[]; stats: { total_teams: number; total_members: number; total_shifts: number } }>("/reports");
+export const getReports = (orgId?: number | null) =>
+  api.get<{ teams: ReportTeam[]; stats: { total_teams: number; total_members: number; total_shifts: number } }>(
+    "/reports", { params: orgId ? { organization_id: orgId } : {} }
+  );
+
+// ── Auth & Admin types ──
+
+export interface AuthUser {
+  id: number;
+  email: string;
+  first_name: string | null;
+  last_name: string | null;
+  is_active: boolean;
+  must_change_password: boolean;
+  platform_role: string;
+  organizations: { id: number; name: string; org_role: string }[];
+  teams: { id: number; name: string; organization_id: number | null; team_role: string }[];
+}
+
+export interface OrganizationData {
+  id: number;
+  name: string;
+  created_at: string | null;
+  updated_at: string | null;
+  member_count?: number;
+  team_count?: number;
+}
+
+export interface OrgMemberData {
+  id: number;
+  email: string;
+  first_name: string | null;
+  last_name: string | null;
+  platform_role: string;
+  org_role: string;
+  membership_id: number;
+}
+
+export interface TeamMemberData {
+  id: number;
+  email: string;
+  first_name: string | null;
+  last_name: string | null;
+  platform_role: string;
+  team_role: string;
+  membership_id: number;
+}
+
+// Auth
+export const authLogin = (email: string, password: string) =>
+  api.post<{ token: string; user: AuthUser }>("/auth/login", { email, password });
+export const authMe = () => api.get<{ user: AuthUser }>("/auth/me");
+export const authChangePassword = (current_password: string, new_password: string) =>
+  api.put<{ message: string; user: AuthUser }>("/auth/password", { current_password, new_password });
+export const authForcePasswordChange = (new_password: string) =>
+  api.put<{ message: string; user: AuthUser }>("/auth/force-password-change", { new_password });
+
+// Admin — Organizations
+export const getOrganizations = () => api.get<{ organizations: OrganizationData[] }>("/admin/organizations");
+export const createOrganization = (name: string) => api.post<OrganizationData>("/admin/organizations", { name });
+export const getOrganization = (id: number) =>
+  api.get<{ organization: OrganizationData; teams: Team[]; members: OrgMemberData[] }>(`/admin/organizations/${id}`);
+export const updateOrganization = (id: number, name: string) => api.put<OrganizationData>(`/admin/organizations/${id}`, { name });
+export const deleteOrganization = (id: number) => api.delete(`/admin/organizations/${id}`);
+
+// Admin — Org members
+export const addOrgMember = (orgId: number, userId: number, orgRole: string) =>
+  api.post(`/admin/organizations/${orgId}/members`, { user_id: userId, org_role: orgRole });
+export const updateOrgMember = (orgId: number, userId: number, orgRole: string) =>
+  api.put(`/admin/organizations/${orgId}/members/${userId}`, { org_role: orgRole });
+export const removeOrgMember = (orgId: number, userId: number) =>
+  api.delete(`/admin/organizations/${orgId}/members/${userId}`);
+
+// Admin — Users
+export const getUsers = () => api.get<{ users: AuthUser[] }>("/admin/users");
+export const createUser = (data: {
+  email: string; password: string; first_name?: string; last_name?: string;
+  platform_role?: string; organization_id?: number; team_id?: number;
+  org_role?: string; team_role?: string; must_change_password?: boolean;
+}) => api.post<AuthUser>("/admin/users", data);
+export const getUser = (id: number) => api.get<{ user: AuthUser }>(`/admin/users/${id}`);
+export const updateUserAdmin = (id: number, data: Partial<AuthUser>) => api.put<AuthUser>(`/admin/users/${id}`, data);
+export const deleteUser = (id: number) => api.delete(`/admin/users/${id}`);
+export const resetUserPassword = (id: number, newPassword: string) =>
+  api.put(`/admin/users/${id}/reset-password`, { new_password: newPassword });
+
+// Admin — Team user memberships
+export const getTeamUsers = (teamId: number) =>
+  api.get<{ members: TeamMemberData[] }>(`/admin/teams/${teamId}/members`);
+export const addTeamUser = (teamId: number, userId: number, teamRole: string) =>
+  api.post(`/admin/teams/${teamId}/members`, { user_id: userId, team_role: teamRole });
+export const updateTeamUser = (teamId: number, userId: number, teamRole: string) =>
+  api.put(`/admin/teams/${teamId}/members/${userId}`, { team_role: teamRole });
+export const removeTeamUser = (teamId: number, userId: number) =>
+  api.delete(`/admin/teams/${teamId}/members/${userId}`);

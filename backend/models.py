@@ -1,13 +1,126 @@
 from datetime import datetime
+import bcrypt
 from flask_sqlalchemy import SQLAlchemy
 
 db = SQLAlchemy()
 
 
+# ══════════════════════════════════════
+#  AUTH & MULTI-TENANT MODELS
+# ══════════════════════════════════════
+
+class User(db.Model):
+    __tablename__ = "users"
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(255), unique=True, nullable=False, index=True)
+    password_hash = db.Column(db.String(255), nullable=False)
+    first_name = db.Column(db.String(100), nullable=True)
+    last_name = db.Column(db.String(100), nullable=True)
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+    must_change_password = db.Column(db.Boolean, default=True, nullable=False)
+    platform_role = db.Column(db.String(20), default="none", nullable=False)  # "shifter_admin" or "none"
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    org_memberships = db.relationship("OrganizationMembership", backref="user", cascade="all, delete-orphan", lazy="select")
+    team_memberships = db.relationship("TeamMembership", backref="user", cascade="all, delete-orphan", lazy="select")
+
+    def set_password(self, password: str):
+        self.password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+    def check_password(self, password: str) -> bool:
+        return bcrypt.checkpw(password.encode("utf-8"), self.password_hash.encode("utf-8"))
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "email": self.email,
+            "first_name": self.first_name,
+            "last_name": self.last_name,
+            "is_active": self.is_active,
+            "must_change_password": self.must_change_password,
+            "platform_role": self.platform_role,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class Organization(db.Model):
+    __tablename__ = "organizations"
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(200), unique=True, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    memberships = db.relationship("OrganizationMembership", backref="organization", cascade="all, delete-orphan", lazy="select")
+    teams = db.relationship("Team", backref="organization", cascade="all, delete-orphan", lazy="select")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class OrganizationMembership(db.Model):
+    __tablename__ = "organization_memberships"
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), nullable=False, index=True)
+    org_role = db.Column(db.String(30), nullable=False, default="member")  # "organization_admin" or "member"
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        db.UniqueConstraint("user_id", "organization_id", name="uq_org_membership"),
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "organization_id": self.organization_id,
+            "org_role": self.org_role,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class TeamMembership(db.Model):
+    __tablename__ = "team_memberships"
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    team_id = db.Column(db.Integer, db.ForeignKey("teams.id"), nullable=False, index=True)
+    team_role = db.Column(db.String(20), nullable=False, default="employee")  # "team_admin" or "employee"
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        db.UniqueConstraint("user_id", "team_id", name="uq_team_membership"),
+    )
+
+    team = db.relationship("Team", backref="team_memberships")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "team_id": self.team_id,
+            "team_role": self.team_role,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ══════════════════════════════════════
+#  EXISTING MODELS
+# ══════════════════════════════════════
+
 class Team(db.Model):
     __tablename__ = "teams"
     id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(100), nullable=False, unique=True)
+    name = db.Column(db.String(100), nullable=False)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), nullable=True, index=True)
     picture_url = db.Column(db.String(255), nullable=True)
     description = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -20,6 +133,7 @@ class Team(db.Model):
         return {
             "id": self.id,
             "name": self.name,
+            "organization_id": self.organization_id,
             "picture_url": self.picture_url,
             "description": self.description,
             "member_count": member_count if member_count is not None else len(self.members),

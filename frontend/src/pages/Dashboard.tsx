@@ -3,10 +3,12 @@ import { Link } from "react-router-dom";
 import toast from "react-hot-toast";
 import { Plus, Users, CalendarClock, CalendarDays, Trash2 } from "lucide-react";
 import { getTeams, createTeam, deleteTeam, type Team } from "../api";
+import { useAuth } from "../contexts/AuthContext";
 import Modal from "../components/Modal";
 import ConfirmDialog from "../components/ConfirmDialog";
 
 export default function Dashboard() {
+  const { selectedOrgId } = useAuth();
   const [teams, setTeams] = useState<Team[]>([]);
   const [stats, setStats] = useState({ total_teams: 0, total_members: 0, total_shifts: 0 });
   const [showAdd, setShowAdd] = useState(false);
@@ -17,7 +19,7 @@ export default function Dashboard() {
 
   const load = async () => {
     try {
-      const { data } = await getTeams();
+      const { data } = await getTeams(selectedOrgId);
       setTeams(data.teams);
       setStats(data.stats);
     } catch {
@@ -27,12 +29,12 @@ export default function Dashboard() {
     }
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { setLoading(true); load(); }, [selectedOrgId]);
 
   const handleCreate = async () => {
     if (!name.trim()) { toast.error("Team name is required"); return; }
     try {
-      await createTeam({ name: name.trim(), description: desc.trim() });
+      await createTeam({ name: name.trim(), description: desc.trim(), organization_id: selectedOrgId ?? undefined } as any);
       toast.success("Team created");
       setShowAdd(false);
       setName("");
